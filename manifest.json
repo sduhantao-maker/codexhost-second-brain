@@ -1,0 +1,189 @@
+{
+  "manifestVersion": 2,
+  "id": "second-brain",
+  "name": {
+    "en": "Second Brain",
+    "zh-CN": "第二大脑"
+  },
+  "version": "0.10.0",
+  "description": {
+    "en": "Remembers what each conversation is doing, how far it got, and which replies are worth keeping. Rest the pointer on a conversation in the sidebar to see its mainline, milestones and tasks, or show them in the conversation header.",
+    "zh-CN": "记住每个对话在做什么、做到哪一步、哪段回复值得留下。鼠标停在侧栏的对话上，就能看到它的主线、里程碑和支线任务；也可以显示在对话标题栏。"
+  },
+  "details": {
+    "en": "Switching between many conversations, it is easy to forget what each one is doing and how far it got, and the replies worth keeping end up scattered where nobody finds them again. Second Brain keeps track of that for you.\n\n- **One conversation, one mainline, written by a model.** After each reply, a small model reads the conversation and writes a specific title, distinctive tags, and the milestones reached, in progress and planned. It also marks a conversation done when its goal looks reached or dropped, and paused after 7 quiet days. What you edit by hand stays.\n- **Milestones and tasks.** Under the mainline are milestones (✓ reached, ● current, ○ planned), and between two milestones the concrete tasks.\n- **A glance from the sidebar.** Rest the pointer on a conversation in the sidebar and its mainline and milestones appear beside it, without opening it; a child conversation can be opened from the bottom of that card, with photos, files or videos attached.\n- **An optional capsule.** Turn it on in the settings to also see the mainline, the current milestone and the task in progress in the conversation header.\n- **Side issues become child conversations.** A new problem that comes up is noted as a spin-off, then opened as a child conversation from the sidebar hover card (two clicks to confirm); in the overview it can also be kept in the same conversation or dismissed.\n- **Find a conversation by a clue**, such as a PR or issue number. When someone reviews, merges or comments, the conversation the PR came from gets a 🔔 in the sidebar.\n- **Keep the replies worth keeping.** Select text in a conversation and click ★ Save, or tell the agent to save the last reply (with the agent integration installed). The overview's Favorites tab keeps every saved passage with where it came from; Go to passage opens the conversation with it highlighted.\n\nThe data stays on this machine. Two things leave it: for summaries, the conversation text, with secrets masked, goes to the provider of the model set for that conversation (Claude Haiku through your Claude Code login, or Codex; conversations of other agents only if you choose a model for them), and PR alerts read GitHub through your gh login. The agent integration changes only its own hook in `~/.claude/settings.json` and its own marked section in `~/.codex/AGENTS.md`, shows the exact change first, keeps a backup only you can read, and can be removed from the overview at any time. Remove it there before you uninstall the extension: uninstalling leaves the hook, the section and the data folder `~/.codexhost/host-extension-data/second-brain/` in place (the hook then says and records nothing).",
+    "zh-CN": "在多个对话之间来回切换，很容易忘了每个对话在做什么、做到了哪一步；值得留下的回复也散在各处，过后找不回来。第二大脑替你记着这些。\n\n- **一个对话一条主线，由模型凝练。** 每轮回复结束后，插件调用小模型读对话，写出具体的标题、有辨识度的标签，并识别出已达成、正在推进和计划中的里程碑；看出目标已完成或已放下时把对话标为已完成，超过 7 天没动的标为暂停。你手动改过的保持不动。\n- **里程碑和支线任务。** 主线下面是里程碑（✓ 已达成、● 当前、○ 计划），两个里程碑之间是具体的支线任务。\n- **侧栏悬停就能看。** 鼠标停在侧栏的对话上，旁边弹出它的主线和里程碑，不用点开；卡片底部可以直接开子对话，还能附带照片、文件或视频。\n- **可选的主线胶囊。** 在设置里打开后，对话标题栏也会显示主线、当前里程碑和正在做的支线任务。\n- **引申问题开成子对话。** 对话中冒出的新问题先记为引申问题，可以在侧栏悬停卡片里开成子对话（连点两次确认）；在总览页还可以留在本对话处理或忽略。\n- **用线索找对话**，比如 PR 和 issue 编号；有人评审、合并或评论时，提出它的对话行上会挂一个 🔔。\n- **收藏值得留下的回复。** 在对话里选中文字点「★ 收藏」，或者让 Agent「收藏上一条回复」（需要装好 Agent 协作）。总览页的「收藏」页签集中保存，记着出处；点「跳回原文」打开对话并高亮那段话。\n\n数据只存在本机。会离开本机的只有两样：凝练时，对话内容（先遮掉密钥）发给这个对话所设模型的服务商（经你已登录的 Claude Code 调 Claude Haiku，或用 Codex；其他 Agent 的对话只在你为它们选了模型时发送）；PR 提醒经你已登录的 gh 读 GitHub。Agent 协作只增删它自己在 `~/.claude/settings.json` 里的一条 hook 和 `~/.codex/AGENTS.md` 里带标记的一段说明，修改前先给你看具体改动并备份（只有你能读），随时可以在总览页卸载。卸载插件前先在那里卸载 Agent 协作：卸载插件不会删掉这条 hook、这段说明和数据目录 `~/.codexhost/host-extension-data/second-brain/`（之后 hook 什么都不说、什么都不记）。"
+  },
+  "author": "sduhantao-maker",
+  "categories": [
+    "workflow",
+    "interface"
+  ],
+  "icon": "assets/icon.png",
+  "settingsSchema": [
+    {
+      "key": "driftPolicy",
+      "type": "select",
+      "label": {
+        "en": "When a new problem shows up in the same conversation",
+        "zh-CN": "同一对话里出现新问题时"
+      },
+      "description": {
+        "en": "What agents with the integration installed do when a message starts a problem unrelated to the conversation's mainline.",
+        "zh-CN": "装好 Agent 协作后，消息里出现与本对话主线无关的新问题时，Agent 怎么做。"
+      },
+      "options": [
+        {
+          "value": "ask",
+          "label": {
+            "en": "Ask me first (recommended)",
+            "zh-CN": "先问我（推荐）"
+          }
+        },
+        {
+          "value": "note",
+          "label": {
+            "en": "Note it, keep going",
+            "zh-CN": "只记录，不打断"
+          }
+        },
+        {
+          "value": "off",
+          "label": {
+            "en": "Do not check",
+            "zh-CN": "不检查"
+          }
+        }
+      ],
+      "default": "ask"
+    },
+    {
+      "key": "showCapsule",
+      "type": "boolean",
+      "label": {
+        "en": "Also show the mainline capsule in the conversation header",
+        "zh-CN": "对话标题栏也显示主线胶囊"
+      },
+      "description": {
+        "en": "Off by default: rest the pointer on a conversation in the sidebar to see its mainline. When on, the capsule also opens for 3 seconds when you switch to a conversation with an active mainline.",
+        "zh-CN": "默认关闭：鼠标停在侧栏的对话上就能看到主线。打开后，切换到有进行中主线的对话时，胶囊会自动展开 3 秒。"
+      },
+      "default": false
+    },
+    {
+      "key": "prAlerts",
+      "type": "boolean",
+      "label": {
+        "en": "Alert me when someone reviews, merges or comments on a PR or issue I worked on",
+        "zh-CN": "我经手的 PR 或 issue 在 GitHub 上有人评审、合并或评论时提醒我"
+      },
+      "description": {
+        "en": "Uses your gh login to read GitHub notifications every few minutes. Comments and reviews by bots, CI results and your own actions do not ring. Read only: notifications are never marked as read.",
+        "zh-CN": "用你已登录的 gh 每几分钟读一次 GitHub 通知。机器人的评论和评审、CI 结果以及你自己的操作不提醒。只读，不会把通知标为已读。"
+      },
+      "default": true
+    },
+    {
+      "key": "autoSummarize",
+      "type": "boolean",
+      "label": {
+        "en": "Let a model summarize each conversation's mainline after its replies (title, tags, milestones and status)",
+        "zh-CN": "每轮回复结束后，用模型自动凝练主线（标题、标签、里程碑和状态）"
+      },
+      "description": {
+        "en": "A small model (Claude Haiku through your Claude Code login, or Codex) writes the title, tags and milestones from the conversation, and marks it done when its goal looks reached or dropped, or paused after 7 quiet days. What you edit by hand stays. The conversation text, with secrets such as keys and passwords masked, goes to that model's provider. Conversations of agents other than Claude Code and Codex are sent only if you choose a model for them below.",
+        "zh-CN": "用小模型（经你已登录的 Claude Code 调 Claude Haiku，或用 Codex）根据对话写出标题、标签和里程碑；看出目标已完成或已放下时把对话标为已完成，超过 7 天没动的标为暂停。你手动改过的保持不动。对话内容（密钥、密码等会先遮掉）会发给对应的模型服务商。Claude Code 和 Codex 以外的 Agent 的对话，只有在下面为它们选了模型时才会发送。"
+      },
+      "default": true
+    },
+    {
+      "key": "summarizeModel",
+      "type": "select",
+      "label": {
+        "en": "Model for Claude Code and Codex conversations",
+        "zh-CN": "Claude Code 和 Codex 的对话用哪个模型凝练"
+      },
+      "options": [
+        {
+          "value": "follow",
+          "label": {
+            "en": "Follow the conversation (Claude Haiku for Claude Code, Codex for Codex)",
+            "zh-CN": "跟随对话（Claude Code 对话用 Claude Haiku，Codex 对话用 Codex）"
+          }
+        },
+        {
+          "value": "claude",
+          "label": {
+            "en": "Claude Haiku for both",
+            "zh-CN": "都用 Claude Haiku"
+          }
+        },
+        {
+          "value": "codex",
+          "label": {
+            "en": "Codex for both",
+            "zh-CN": "都用 Codex"
+          }
+        }
+      ],
+      "default": "follow"
+    },
+    {
+      "key": "summarizeOthers",
+      "type": "select",
+      "label": {
+        "en": "Conversations of other agents (pi, DeepSeek, Grok, …)",
+        "zh-CN": "其他 Agent（如 pi、DeepSeek、Grok）的对话"
+      },
+      "description": {
+        "en": "Whether conversations of agents other than Claude Code and Codex are summarized, and by which model. Their text goes to the provider of the model you choose. With “Do not summarize” they stay “Not summarized”.",
+        "zh-CN": "Claude Code 和 Codex 以外的 Agent 的对话要不要凝练、用哪个模型。选了模型，这些对话的内容就会发给那个模型的服务商；选「不凝练」时它们保持「未凝练」。"
+      },
+      "options": [
+        {
+          "value": "none",
+          "label": {
+            "en": "Do not summarize; send them to no model",
+            "zh-CN": "不凝练，不发给任何模型"
+          }
+        },
+        {
+          "value": "claude",
+          "label": {
+            "en": "Claude Haiku: their text goes to the provider your Claude Code uses",
+            "zh-CN": "用 Claude Haiku：对话内容发给你的 Claude Code 所用的服务商"
+          }
+        },
+        {
+          "value": "codex",
+          "label": {
+            "en": "Codex: their text goes to the provider your Codex uses",
+            "zh-CN": "用 Codex：对话内容发给你的 Codex 所用的服务商"
+          }
+        }
+      ],
+      "default": "none"
+    }
+  ],
+  "page": {
+    "apiVersion": 1,
+    "entry": "page/index.mjs",
+    "style": "page/style.css",
+    "title": {
+      "en": "Second Brain",
+      "zh-CN": "第二大脑"
+    }
+  },
+  "desktop": {
+    "apiVersion": 1,
+    "script": "desktop.js"
+  },
+  "web": {
+    "apiVersion": 1,
+    "entry": "web/index.mjs"
+  },
+  "backend": {
+    "apiVersion": 1,
+    "entry": "backend/index.mjs"
+  }
+}

@@ -1,0 +1,9 @@
+# Text files are checked out with LF everywhere, so the built files and the zip hash do not change
+# with a CRLF checkout.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.zip binary

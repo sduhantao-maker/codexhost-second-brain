@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "rev": 6,
+  "mainlines": {
+    "gkg8": {
+      "id": "gkg8",
+      "goal": "开发主线插件",
+      "status": "active",
+      "createdAt": 1,
+      "updatedAt": 5,
+      "done": [
+        {
+          "id": "cxvqyt",
+          "text": "设计确认",
+          "at": 3,
+          "threadId": "main"
+        }
+      ],
+      "parked": [
+        {
+          "id": "b2yg82",
+          "text": "侧栏图标错位",
+          "at": 4
+        }
+      ]
+    }
+  },
+  "threads": {
+    "main": {
+      "updatedAt": 5,
+      "mainlineId": "gkg8",
+      "via": "agent",
+      "doing": {
+        "text": "写迁移",
+        "at": 5
+      }
+    },
+    "unrelated": {
+      "updatedAt": 2,
+      "mainlineId": "gkg8",
+      "via": "user",
+      "lastPrompt": {
+        "text": "把屋子填满",
+        "at": 6
+      }
+    }
+  }
+}

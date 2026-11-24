@@ -1,0 +1,1322 @@
+/*
+ * The overview page. Colours and shapes come from codexhost's page variables (--cx-page-*);
+ * the values after each comma are fallbacks for hosts that do not set one.
+ *
+ * Text in a colour reads at 4.5:1 or more on the host's light and dark themes: the accent and
+ * danger colours are mixed a quarter of the way toward the text colour, and the success, warning
+ * and merged colours (which codexhost does not set) have a light and a dark variant.
+ */
+
+.mlp {
+  --mlp-success: var(--cx-page-success, #15803d);
+  --mlp-warning: var(--cx-page-warning, #a35a06);
+  --mlp-merged: #8250df;
+  /* Text on a strong accent or danger background. */
+  --mlp-on-strong: #fff;
+  --mlp-accent-text: color-mix(in srgb, var(--cx-page-accent, #2563eb) 75%, var(--cx-page-text, #1f2328));
+  --mlp-danger-text: color-mix(in srgb, var(--cx-page-danger, #c42b2b) 75%, var(--cx-page-text, #1f2328));
+  --mlp-success-text: color-mix(in srgb, var(--mlp-success) 70%, var(--cx-page-text, #1f2328));
+  --mlp-warning-text: color-mix(in srgb, var(--mlp-warning) 70%, var(--cx-page-text, #1f2328));
+  --mlp-merged-text: color-mix(in srgb, var(--mlp-merged) 70%, var(--cx-page-text, #1f2328));
+  box-sizing: border-box;
+  max-width: 960px;
+  padding: 20px 24px 40px;
+  color: var(--cx-page-text, #1f2328);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.mlp[data-scheme="dark"] {
+  --mlp-success: var(--cx-page-success, #5bd18b);
+  --mlp-warning: var(--cx-page-warning, #f5bd5a);
+  --mlp-merged: #b392f0;
+  --mlp-on-strong: #10141c;
+}
+
+/* Read by screen readers, not shown. */
+.mlp-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.mlp *,
+.mlp *::before,
+.mlp *::after {
+  box-sizing: border-box;
+}
+
+.mlp button {
+  font: inherit;
+}
+
+.mlp h3 {
+  margin: 14px 0 4px;
+  color: var(--cx-page-text-muted, #5f6670);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mlp-header h1 {
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.mlp-intro {
+  margin: 0 0 12px;
+  color: var(--cx-page-text-muted, #5f6670);
+}
+
+.mlp-muted,
+.mlp-meta {
+  color: var(--cx-page-text-muted, #5f6670);
+}
+
+.mlp-meta {
+  font-size: 12px;
+}
+
+.mlp-warn {
+  color: var(--mlp-warning-text);
+}
+
+.mlp-main {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.mlp-spacer {
+  flex: 1;
+}
+
+.mlp-label {
+  font-weight: 500;
+}
+
+/* Messages ------------------------------------------------------------------------------------ */
+
+.mlp-error,
+.mlp-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--cx-page-danger, #c42b2b);
+  border-radius: var(--cx-page-radius, 8px);
+  color: var(--mlp-danger-text);
+}
+
+.mlp-notice {
+  border-color: var(--cx-page-accent, #2563eb);
+  color: var(--cx-page-text, inherit);
+}
+
+/* Search -------------------------------------------------------------------------------------- */
+
+.mlp-find {
+  margin: 4px 0 8px;
+}
+
+.mlp-find-box {
+  position: relative;
+  max-width: 640px;
+}
+
+.mlp-find-icon {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  width: 15px;
+  height: 15px;
+  color: var(--cx-page-text-muted, #5f6670);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.mlp .mlp-find-input {
+  padding: 7px 10px 7px 32px;
+  border-radius: var(--cx-page-radius, 8px);
+  font-size: 14px;
+}
+
+.mlp-find-results {
+  display: grid;
+  gap: 6px;
+  max-width: 640px;
+  margin-top: 8px;
+}
+
+.mlp-find-results[hidden] {
+  display: none;
+}
+
+.mlp-hit {
+  padding: 8px 12px;
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+  border-radius: var(--cx-page-radius, 10px);
+  background: var(--cx-page-surface, transparent);
+}
+
+.mlp-hit-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.mlp-hit-title {
+  min-width: 0;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.mlp-hit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 2px;
+  font-size: 12.5px;
+}
+
+.mlp-match {
+  margin-top: 4px;
+  color: var(--cx-page-text-muted, #5f6670);
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+/* Sections ------------------------------------------------------------------------------------ */
+
+.mlp-section {
+  margin-top: 24px;
+}
+
+.mlp-section h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+/* Conversation tree --------------------------------------------------------------------------- */
+
+.mlp-tree {
+  display: grid;
+  gap: 6px;
+}
+
+.mlp-node {
+  border-radius: var(--cx-page-radius, 10px);
+}
+
+.mlp-tree > .mlp-node {
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+  background: var(--cx-page-surface, transparent);
+}
+
+.mlp-progress {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.mlp-current {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.mlp-doing {
+  margin-top: 2px;
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+.mlp-children {
+  margin: 0 0 6px 15px;
+  padding-left: 12px;
+  border-left: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+}
+
+/* Deep delegation chains stop moving right. */
+.mlp-children .mlp-children .mlp-children .mlp-children {
+  margin-left: 0;
+}
+
+.mlp-more {
+  margin: 4px 0 2px;
+  font-size: 12.5px;
+}
+
+/* Status dots and badges ------------------------------------------------------------------------ */
+
+.mlp-status {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--cx-page-text-muted, #9ca3af);
+}
+
+.mlp-hit-head .mlp-status {
+  margin-top: 0;
+}
+
+.mlp-status[data-status="running"] {
+  background: var(--cx-page-accent, #2563eb);
+}
+
+.mlp-status[data-status="waiting"] {
+  background: var(--cx-page-warning, #d97706);
+}
+
+.mlp-status[data-status="unknown"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--cx-page-text-muted, #9ca3af);
+}
+
+.mlp-badge {
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--cx-page-text, #000) 8%, transparent);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.mlp-badge[data-conv-status="active"],
+.mlp-badge[data-ms-state="current"] {
+  background: color-mix(in srgb, var(--cx-page-accent, #2563eb) 12%, transparent);
+  color: var(--mlp-accent-text);
+}
+
+.mlp-badge[data-conv-status="paused"],
+.mlp-badge[data-state="outdated"] {
+  background: color-mix(in srgb, var(--mlp-warning) 12%, transparent);
+  color: var(--mlp-warning-text);
+}
+
+.mlp-badge[data-conv-status="done"],
+.mlp-badge[data-ms-state="done"],
+.mlp-badge[data-state="installed"],
+.mlp-badge[data-ref-state="open"] {
+  background: color-mix(in srgb, var(--mlp-success) 12%, transparent);
+  color: var(--mlp-success-text);
+}
+
+.mlp-badge[data-ref-state="merged"] {
+  background: color-mix(in srgb, var(--mlp-merged) 12%, transparent);
+  color: var(--mlp-merged-text);
+}
+
+.mlp-draft {
+  border: 1px dashed var(--cx-page-border, rgba(0, 0, 0, 0.25));
+  background: transparent;
+  color: var(--cx-page-text-muted, #5f6670);
+}
+
+.mlp-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.mlp-tag {
+  padding: 0 7px;
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+  border-radius: 10px;
+  color: var(--cx-page-text-muted, #5f6670);
+  font-size: 11.5px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.mlp-id {
+  color: var(--cx-page-text-muted, #5f6670);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+/* Expanded conversation ------------------------------------------------------------------------- */
+
+.mlp-detail {
+  margin: 0 10px 10px 32px;
+  padding: 10px 12px 12px;
+  border-radius: var(--cx-page-radius, 8px);
+  background: color-mix(in srgb, var(--cx-page-text, #000) 3%, transparent);
+}
+
+.mlp-detail-meta,
+.mlp-detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.mlp-detail-title,
+.mlp-detail-tags {
+  margin-top: 6px;
+}
+
+.mlp-detail-tags .mlp-tags {
+  margin-top: 0;
+}
+
+.mlp-milestones {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mlp-ms {
+  position: relative;
+  padding: 2px 0 4px 22px;
+}
+
+/* The line that joins one milestone to the next. */
+.mlp-ms::before {
+  position: absolute;
+  top: 18px;
+  bottom: -4px;
+  left: 6px;
+  width: 1px;
+  background: var(--cx-page-border, rgba(0, 0, 0, 0.12));
+  content: "";
+}
+
+.mlp-ms:last-child::before {
+  display: none;
+}
+
+.mlp-ms-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.mlp-ms-text {
+  flex: 1;
+  min-width: 0;
+  padding-top: 2px;
+  word-break: break-word;
+}
+
+.mlp-ms-text > * + * {
+  margin-left: 8px;
+}
+
+.mlp-ms-text .mlp-badge {
+  display: inline-block;
+}
+
+.mlp-ms-mark {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  width: 13px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.mlp-ms[data-state="done"] .mlp-ms-mark {
+  color: var(--mlp-success-text);
+}
+
+.mlp-ms[data-state="current"] .mlp-ms-mark {
+  color: var(--mlp-accent-text);
+}
+
+.mlp-ms[data-state="planned"] .mlp-ms-mark,
+.mlp-ms[data-state="planned"] .mlp-ms-title {
+  color: var(--cx-page-text-muted, #5f6670);
+}
+
+.mlp-ms-title {
+  min-width: 0;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.mlp-ms-head .mlp-editor {
+  flex: 1;
+}
+
+.mlp-tasks {
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mlp-task,
+.mlp-doing-row,
+.mlp-spin {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 -6px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.mlp-task:hover,
+.mlp-doing-row:hover,
+.mlp-spin:hover {
+  background: color-mix(in srgb, var(--cx-page-text, #000) 5%, transparent);
+}
+
+.mlp-task-mark,
+.mlp-spin-mark {
+  flex: none;
+  width: 14px;
+  color: var(--cx-page-text-muted, #5f6670);
+  text-align: center;
+}
+
+.mlp-task[data-done] .mlp-task-mark {
+  color: var(--mlp-success-text);
+}
+
+.mlp-task[data-done] .mlp-task-text {
+  color: var(--cx-page-text-muted, #5f6670);
+}
+
+.mlp-carried {
+  display: block;
+  font-size: 12px;
+}
+
+.mlp-doing-row {
+  align-items: center;
+  color: var(--mlp-accent-text);
+}
+
+.mlp-doing-row .mlp-doing {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.mlp-doing-row .mlp-editor {
+  flex: 1;
+}
+
+.mlp-row-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+/* With a mouse, row actions wait for the pointer; on touch screens they always show. */
+@media (hover: hover) {
+  .mlp-task .mlp-row-actions,
+  .mlp-doing-row .mlp-row-actions,
+  .mlp-ms-head .mlp-row-actions {
+    opacity: 0;
+  }
+
+  .mlp-task:hover .mlp-row-actions,
+  .mlp-task:focus-within .mlp-row-actions,
+  .mlp-doing-row:hover .mlp-row-actions,
+  .mlp-doing-row:focus-within .mlp-row-actions,
+  .mlp-ms-head:hover .mlp-row-actions,
+  .mlp-ms-head:focus-within .mlp-row-actions,
+  .mlp-ms[data-state="current"] > .mlp-ms-head .mlp-row-actions,
+  .mlp-row-actions:has([data-confirm]) {
+    opacity: 1;
+  }
+}
+
+.mlp-adder {
+  display: block;
+  max-width: 420px;
+  margin: 4px 0 2px;
+  border-style: dashed;
+}
+
+.mlp-adder:focus {
+  border-style: solid;
+}
+
+.mlp-ms .mlp-adder,
+.mlp-ms-add {
+  margin-left: 0;
+}
+
+.mlp-ms-add .mlp-editor {
+  max-width: 420px;
+  margin: 4px 0 2px;
+}
+
+.mlp-spins {
+  display: grid;
+  gap: 2px;
+}
+
+.mlp-spin {
+  flex-wrap: wrap;
+}
+
+/* Below this width the actions move under the text instead of squeezing it. */
+.mlp-spin > .mlp-main {
+  flex: 1 1 200px;
+}
+
+.mlp-spin[data-state="open"] .mlp-spin-mark {
+  color: var(--mlp-warning-text);
+}
+
+.mlp-spin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mlp-clues {
+  display: grid;
+  gap: 4px;
+}
+
+.mlp-clue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.mlp-detail-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+}
+
+.mlp-segmented {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.15));
+  border-radius: 6px;
+}
+
+.mlp-seg {
+  padding: 2px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--cx-page-text, inherit);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.mlp-seg + .mlp-seg {
+  border-left: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.15));
+}
+
+.mlp-seg:hover {
+  background: color-mix(in srgb, var(--cx-page-text, #000) 6%, transparent);
+}
+
+.mlp-seg[aria-pressed="true"] {
+  background: var(--mlp-accent-text);
+  color: var(--mlp-on-strong);
+  cursor: default;
+}
+
+/* Buttons and fields -------------------------------------------------------------------------- */
+
+.mlp-btn {
+  padding: 3px 12px;
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.15));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cx-page-text, inherit);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mlp-btn:hover {
+  background: color-mix(in srgb, var(--cx-page-text, #000) 6%, transparent);
+}
+
+.mlp-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.mlp-btn-sm {
+  padding: 1px 9px;
+  font-size: 12px;
+}
+
+.mlp-quiet {
+  border-color: transparent;
+  color: var(--cx-page-text-muted, #5f6670);
+}
+
+.mlp-primary {
+  border-color: var(--mlp-accent-text);
+  background: var(--mlp-accent-text);
+  color: var(--mlp-on-strong);
+}
+
+.mlp-primary:hover {
+  background: var(--mlp-accent-text);
+  filter: brightness(1.08);
+}
+
+.mlp-danger {
+  color: var(--mlp-danger-text);
+}
+
+.mlp-btn[data-confirm] {
+  border-color: var(--mlp-danger-text);
+  background: var(--mlp-danger-text);
+  color: var(--mlp-on-strong);
+}
+
+.mlp-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--cx-page-text-muted, #5f6670);
+  cursor: pointer;
+}
+
+.mlp-icon:hover {
+  background: color-mix(in srgb, var(--cx-page-text, #000) 8%, transparent);
+  color: var(--cx-page-text, inherit);
+}
+
+.mlp-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.mlp-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--mlp-accent-text);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mlp-link:hover {
+  text-decoration: underline;
+}
+
+.mlp-input {
+  width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.15));
+  border-radius: 6px;
+  background: var(--cx-page-bg, transparent);
+  color: var(--cx-page-text, inherit);
+  font: inherit;
+}
+
+.mlp-input:focus {
+  border-color: var(--cx-page-accent, #2563eb);
+  outline: none;
+}
+
+.mlp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* PRs and issues -------------------------------------------------------------------------------- */
+
+.mlp-refs-search {
+  max-width: 420px;
+  margin: 10px 0 8px;
+}
+
+.mlp-refs {
+  display: grid;
+  gap: 6px;
+}
+
+.mlp-ref {
+  padding: 8px 12px;
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+  border-radius: var(--cx-page-radius, 10px);
+  background: var(--cx-page-surface, transparent);
+}
+
+.mlp-ref[data-unseen] {
+  border-color: var(--cx-page-accent, #2563eb);
+  box-shadow: inset 3px 0 0 var(--cx-page-accent, #2563eb);
+}
+
+.mlp-ref-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.mlp-ref-link {
+  color: var(--cx-page-text, inherit);
+  font-weight: 600;
+  text-decoration: none;
+  word-break: break-word;
+}
+
+.mlp-ref-link:hover {
+  color: var(--mlp-accent-text);
+  text-decoration: underline;
+}
+
+.mlp-ref-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 4px;
+}
+
+.mlp-news {
+  color: var(--mlp-accent-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mlp-asked {
+  margin-top: 4px;
+  color: var(--cx-page-text-muted, #5f6670);
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+/* Favorites ------------------------------------------------------------------------------------ */
+
+.mlp-favorites {
+  display: grid;
+  gap: 8px;
+}
+
+.mlp-favorite {
+  padding: 10px 12px;
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+  border-radius: var(--cx-page-radius, 10px);
+  background: var(--cx-page-surface, transparent);
+  box-shadow: inset 3px 0 0 #f5c518;
+}
+
+.mlp-favorite-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.mlp-favorite-title {
+  max-width: 100%;
+  font-weight: 600;
+  text-align: left;
+  word-break: break-word;
+}
+
+.mlp-favorite-text {
+  margin-top: 8px;
+  color: var(--cx-page-text, inherit);
+  font-size: 13.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mlp-favorite-text[data-folded] {
+  max-height: calc(1.6em * 6);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(#000 65%, transparent);
+  mask-image: linear-gradient(#000 65%, transparent);
+}
+
+.mlp-favorite-text.mlp-md {
+  white-space: normal;
+}
+
+.mlp-md > :first-child {
+  margin-top: 0;
+}
+
+.mlp-md p,
+.mlp-md-list,
+.mlp-md-pre,
+.mlp-md-quote,
+.mlp-md-table {
+  margin: 6px 0 0;
+}
+
+.mlp-md-list {
+  padding-left: 20px;
+}
+
+.mlp-md-list li[data-depth="1"] {
+  margin-left: 16px;
+}
+
+.mlp-md-list li[data-depth="2"],
+.mlp-md-list li[data-depth="3"] {
+  margin-left: 32px;
+}
+
+.mlp-md-code,
+.mlp-md-pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--cx-page-code-bg, rgba(127, 127, 127, 0.12));
+  border-radius: 4px;
+}
+
+.mlp-md-code {
+  padding: 1px 4px;
+}
+
+.mlp-md-pre {
+  padding: 8px 10px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.mlp-md-quote {
+  padding-left: 10px;
+  border-left: 3px solid var(--cx-page-border, rgba(0, 0, 0, 0.16));
+  color: var(--cx-page-text-muted, #5f6670);
+}
+
+.mlp-md-table {
+  overflow-x: auto;
+}
+
+.mlp-md-table table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.mlp-md-table th,
+.mlp-md-table td {
+  padding: 3px 8px;
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+  text-align: left;
+  vertical-align: top;
+}
+
+.mlp-md-rule {
+  border: 0;
+  border-top: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+}
+
+.mlp-md a {
+  color: var(--mlp-accent-text);
+}
+
+.mlp-favorite .mlp-more {
+  margin-top: 2px;
+}
+
+.mlp-favorite-actions {
+  margin-top: 8px;
+}
+
+/* Agent integration --------------------------------------------------------------------------- */
+
+.mlp-integration {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+  border-radius: var(--cx-page-radius, 10px);
+  background: var(--cx-page-surface, transparent);
+}
+
+.mlp-preview {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--cx-page-border, rgba(0, 0, 0, 0.2));
+  border-radius: var(--cx-page-radius, 10px);
+}
+
+.mlp-preview-title {
+  margin-bottom: 6px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.mlp-pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--cx-page-text, #000) 6%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Settings ------------------------------------------------------------------------------------ */
+
+.mlp-field {
+  margin-bottom: 10px;
+}
+
+.mlp-field > .mlp-label {
+  margin-bottom: 4px;
+}
+
+/* The choices of one setting, named by their legend. */
+.mlp-fieldset {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.mlp-fieldset > legend {
+  padding: 0;
+}
+
+.mlp-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.mlp-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+/* Narrow pages (Web on a phone) ----------------------------------------------------------------- */
+
+@media (max-width: 560px) {
+  .mlp {
+    padding: 14px 12px 32px;
+  }
+
+  .mlp-detail {
+    margin-left: 8px;
+    margin-right: 4px;
+  }
+
+  .mlp-children {
+    margin-left: 8px;
+    padding-left: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mlp-row,
+  .mlp-row-chevron svg {
+    transition: none;
+  }
+}
+
+/* Model summaries ------------------------------------------------------------------------- */
+
+.mlp-summarizer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: -4px 0 10px;
+}
+
+.mlp-pinned {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 4px 0 6px;
+}
+
+.mlp-error-text {
+  color: var(--mlp-danger-text);
+}
+
+.mlp-select {
+  max-width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--cx-page-border, rgba(127, 127, 127, 0.3));
+  border-radius: 6px;
+  background: var(--cx-page-surface, transparent);
+  color: inherit;
+  font: inherit;
+}
+
+/* Compact overview (0.5): tabs, status segments, one line per conversation -------------------- */
+
+/* The host shows the page's name already; the heading stays for screen readers only. */
+.mlp-header {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.mlp-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 6px 0 14px;
+  border-bottom: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+}
+
+.mlp-tab {
+  margin-bottom: -1px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--cx-page-text-muted, #5f6670);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.mlp-tab:hover {
+  color: var(--cx-page-text, inherit);
+}
+
+.mlp-tab[aria-selected="true"] {
+  border-bottom-color: var(--cx-page-accent, #2563eb);
+  color: var(--cx-page-text, inherit);
+  font-weight: 600;
+}
+
+.mlp-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.mlp-toolbar .mlp-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+}
+
+.mlp-seg-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.mlp-seg[aria-pressed="true"] .mlp-seg-count {
+  opacity: 1;
+}
+
+.mlp-bucket + .mlp-bucket {
+  margin-top: 14px;
+}
+
+.mlp-bucket-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0 0 5px 4px;
+  color: var(--cx-page-text-muted, #5f6670);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mlp-bucket-count {
+  font-weight: 400;
+}
+
+/* One list with hairlines, instead of a box around every conversation. */
+.mlp-conversations .mlp-tree {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+  border-radius: var(--cx-page-radius, 10px);
+  background: var(--cx-page-surface, transparent);
+}
+
+.mlp-conversations .mlp-tree > .mlp-node {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.mlp-conversations .mlp-tree > .mlp-node + .mlp-node {
+  border-top: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.08));
+}
+
+.mlp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px 0 12px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.mlp-row:hover {
+  background: color-mix(in srgb, var(--cx-page-text, #000) 4%, transparent);
+}
+
+/* The title is the button that opens the details; the rest of the line is plain text beside it. */
+.mlp-row-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  align-self: stretch;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mlp-row-toggle:focus-visible {
+  outline: 2px solid var(--cx-page-accent, #2563eb);
+  outline-offset: -2px;
+}
+
+.mlp-node[data-expanded] > .mlp-row {
+  background: color-mix(in srgb, var(--cx-page-accent, #2563eb) 7%, transparent);
+}
+
+.mlp-node[data-flash] > .mlp-row {
+  background: color-mix(in srgb, var(--cx-page-accent, #2563eb) 16%, transparent);
+}
+
+.mlp-row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mlp-row-current {
+  flex: 0 1 30%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cx-page-text-muted, #5f6670);
+  font-size: 12.5px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mlp-row-progress,
+.mlp-row-time {
+  flex: none;
+  color: var(--cx-page-text-muted, #5f6670);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mlp-row-time {
+  min-width: 56px;
+  text-align: right;
+}
+
+.mlp-row-open {
+  flex: none;
+  visibility: hidden;
+}
+
+.mlp-row:hover .mlp-row-open,
+.mlp-row:focus-within .mlp-row-open {
+  visibility: visible;
+}
+
+.mlp-row-chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--cx-page-text-muted, #5f6670);
+}
+
+.mlp-row-chevron svg {
+  width: 14px;
+  height: 14px;
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+
+.mlp-node[data-expanded] > .mlp-row .mlp-row-chevron svg {
+  transform: none;
+}
+
+.mlp-row .mlp-status {
+  margin-top: 0;
+}
+
+.mlp-children-toggle {
+  display: block;
+  margin: -2px 0 6px 30px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--cx-page-text-muted, #5f6670);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mlp-children-toggle::before {
+  content: "└ ";
+}
+
+.mlp-children-toggle:hover {
+  color: var(--mlp-accent-text);
+}
+
+.mlp-conversations .mlp-children {
+  margin: 0 0 6px 26px;
+  padding-left: 6px;
+  border-left: 1px solid var(--cx-page-border, rgba(0, 0, 0, 0.12));
+}
+
+.mlp-children > .mlp-node > .mlp-row {
+  min-height: 30px;
+}
+
+.mlp-oneline {
+  overflow: hidden;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

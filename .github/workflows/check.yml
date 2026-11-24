@@ -1,0 +1,25 @@
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # The platform the extension is tested on; Windows and Linux are not verified yet (see README).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Type check, tests (no model is ever called: the test run sets MAINLINE_NO_MODEL=1) and build.
+      - run: npm run check
+      - name: Built files match the source
+        run: git diff --exit-code -- desktop.js web/index.mjs page/index.mjs page/style.css backend/index.mjs bin/mainline.mjs
