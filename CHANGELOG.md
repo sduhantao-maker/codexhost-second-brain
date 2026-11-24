@@ -1,5 +1,11 @@
 # 更新记录 / Changelog
 
+## 0.10.1
+
+插件介绍配上了图：插件页面和 README 里有侧栏悬停卡片、工作方式图、总览页和收藏回复的截图，图里的示例数据都是虚构的。README 中英文两节各有一套，`npm run screenshots` 可以重新生成。插件本身的功能没有变化。
+
+The extension's details now show pictures: the sidebar hover card, how it works, the overview, and saving a reply; all example data in them is made up. The README carries the same images in Chinese and English, and `npm run screenshots` regenerates them. The extension itself works as before.
+
 ## 0.10.0
 
 第一个公开版本。第二大脑记住每个对话在做什么、做到哪一步、哪段回复值得留下。

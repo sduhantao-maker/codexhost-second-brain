@@ -1,0 +1,407 @@
+/*
+ * The mock host around the extension in the README images: a plain, neutral window with a sidebar
+ * of conversations and a conversation, on a soft background. None of this is the extension; the
+ * hover card, the progress badge, the bells, the ★ Save button and the overview page bring their
+ * own styles (src/ui/hover/styles.ts, src/ui/favorites/index.ts, page/style.css).
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Hiragino Sans GB", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The image: a soft background around the window, with a little room on every side. */
+.canvas {
+  --fg: #1f2328;
+  --muted: #5f6670;
+  --faint: #8a9099;
+  --line: rgba(15, 23, 42, 0.08);
+  --hover: rgba(15, 23, 42, 0.05);
+  --selected: rgba(15, 23, 42, 0.085);
+  --window: #ffffff;
+  --side: #f5f6f8;
+  --bubble: #f0f2f5;
+  position: relative;
+  width: 880px;
+  padding: 22px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 100% 0%, rgba(59, 110, 246, 0.1), rgba(59, 110, 246, 0) 55%),
+    radial-gradient(90% 80% at 0% 100%, rgba(251, 191, 36, 0.07), rgba(251, 191, 36, 0) 60%),
+    linear-gradient(180deg, #f7f8fb 0%, #eef1f6 100%);
+  color: var(--fg);
+}
+
+.canvas[data-scheme="dark"] {
+  --fg: #e7e8ea;
+  --muted: #a1a6ae;
+  --faint: #7d838c;
+  --line: rgba(255, 255, 255, 0.08);
+  --hover: rgba(255, 255, 255, 0.06);
+  --selected: rgba(255, 255, 255, 0.1);
+  --window: #18191c;
+  --side: #1f2023;
+  --bubble: #2a2c31;
+  background:
+    radial-gradient(120% 90% at 100% 0%, rgba(59, 110, 246, 0.22), rgba(59, 110, 246, 0) 55%),
+    radial-gradient(90% 80% at 0% 100%, rgba(251, 191, 36, 0.06), rgba(251, 191, 36, 0) 60%),
+    linear-gradient(180deg, #121316 0%, #0c0d0f 100%);
+}
+
+.window {
+  display: flex;
+  min-height: 460px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--window);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 22px 48px -18px rgba(15, 23, 42, 0.28);
+}
+
+.canvas[data-scheme="dark"] .window {
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 24px 56px -16px rgba(0, 0, 0, 0.7);
+}
+
+/* ---------------------------------------------------------------- sidebar */
+
+.sidebar {
+  flex: none;
+  width: 290px;
+  padding: 14px 10px;
+  border-right: 1px solid var(--line);
+  background: var(--side);
+  font-size: 13.5px;
+}
+
+.new-chat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  margin: 0 2px 14px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--window);
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.new-icon {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.ws + .ws {
+  margin-top: 10px;
+}
+
+.ws-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.ws-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  margin-bottom: 1px;
+  padding: 0 10px 0 32px;
+  border-radius: 8px;
+  color: var(--fg);
+  cursor: default;
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.row[aria-current="page"] {
+  background: var(--selected);
+  font-weight: 500;
+}
+
+.row-icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--faint);
+}
+
+.row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* ---------------------------------------------------------------- conversation */
+
+.main {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--window);
+}
+
+.topbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 48px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread {
+  padding: 20px 24px 8px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.msg.user {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+
+/* Room for the host's selection toolbar above the selected first line of the reply. */
+.canvas[data-scene="save"] .msg.user {
+  margin-bottom: 44px;
+}
+
+.bubble {
+  max-width: 78%;
+  padding: 8px 13px;
+  border-radius: 14px;
+  background: var(--bubble);
+}
+
+.msg.agent p {
+  margin: 0 0 10px;
+}
+
+/* Messages only sketched, behind the hover card. */
+.thread.sketch .bubble {
+  width: 46%;
+  padding: 12px 14px;
+}
+
+.thread.sketch .para {
+  display: grid;
+  gap: 9px;
+  margin: 6px 0 22px;
+}
+
+.bar {
+  height: 9px;
+  border-radius: 5px;
+  background: var(--line);
+}
+
+.thread.sketch .bubble .bar {
+  background: rgba(15, 23, 42, 0.1);
+}
+
+.canvas[data-scheme="dark"] .thread.sketch .bubble .bar {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.msg.agent ::selection {
+  background: rgba(65, 118, 230, 0.26);
+  color: inherit;
+}
+
+.composer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 46px;
+  margin: auto 22px 18px;
+  padding: 0 8px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--window);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.composer-hint {
+  flex: 1;
+  color: var(--faint);
+  font-size: 13.5px;
+}
+
+.send {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--fg);
+  color: var(--window);
+}
+
+.send-icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* codexhost Web's own bar over selected text (its "popover" and "action" styles). */
+.selection-toolbar {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  overflow: hidden;
+  border: 0.5px solid rgba(255, 255, 255, 0.22);
+  border-radius: 9999px;
+  background: #000;
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.32),
+    0 6px 18px rgba(0, 0, 0, 0.75),
+    0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+.selection-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 25px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 9999px 0 0 9999px;
+  background: none;
+  color: #f5f5f7;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.selection-toolbar button + button {
+  border-left: 0.5px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0 9999px 9999px 0;
+}
+
+.toolbar-icon {
+  width: 13px;
+  height: 13px;
+  color: #fff;
+}
+
+/* The mouse pointer resting on a row. */
+.pointer {
+  position: absolute;
+  z-index: 10;
+  width: 17px;
+  height: 21px;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.35));
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- overview page */
+
+.page-window {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  --cx-page-bg: #ffffff;
+  --cx-page-surface: #ffffff;
+  --cx-page-text: #0f1115;
+  --cx-page-text-muted: #61666b;
+  --cx-page-border: rgba(0, 0, 0, 0.1);
+  --cx-page-accent: #4176e6;
+  --cx-page-danger: #ec1313;
+  --cx-page-radius: 12px;
+  color: var(--cx-page-text);
+  font-size: 13.5px;
+}
+
+.page-root {
+  background: var(--cx-page-bg);
+}
+
+/* The host's tab of the page. */
+.host-tabs {
+  display: flex;
+  align-items: flex-end;
+  height: 44px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--side);
+}
+
+.host-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  margin-bottom: -1px;
+  padding: 0 16px 0 12px;
+  border: 1px solid var(--line);
+  border-bottom-color: var(--cx-page-bg);
+  border-radius: 10px 10px 0 0;
+  background: var(--cx-page-bg);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.host-tab-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+}
+
+/* A long page ends in a fade: it goes on below. */
+.page-window.cut::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 72px;
+  background: linear-gradient(rgba(255, 255, 255, 0), #ffffff 88%);
+  pointer-events: none;
+}

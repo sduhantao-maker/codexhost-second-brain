@@ -1,0 +1,195 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="516" viewBox="0 0 880 516">
+  <!-- How Second Brain works. Colours of assets/icon.svg: blue #3B6EF6 to #1E41B0, white, amber
+       #FBBF24 (the current milestone). Text in the system fonts; npm run screenshots draws it as
+       the PNG of the same name (at 2x). The examples are made up (a web shop, acme/shop-web). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7f8fb"/>
+      <stop offset="1" stop-color="#eef1f6"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="1" cy="0" r="0.85">
+      <stop offset="0" stop-color="#3B6EF6" stop-opacity="0.11"/>
+      <stop offset="1" stop-color="#3B6EF6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3B6EF6"/>
+      <stop offset="1" stop-color="#1E41B0"/>
+    </linearGradient>
+    <filter id="card" x="-10%" y="-10%" width="120%" height="135%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.08"/>
+    </filter>
+    <filter id="lift" x="-12%" y="-12%" width="124%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="11" flood-color="#1E41B0" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M1.5 1.5 8.5 5 1.5 8.5" fill="none" stroke="#3B6EF6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; fill: #1f2328; }
+    .step { font-size: 13px; font-weight: 600; fill: #1E41B0; }
+    .num { font-size: 11px; font-weight: 700; fill: #fff; }
+    .h { font-size: 13.5px; font-weight: 600; }
+    .c { font-size: 11.5px; fill: #5f6670; }
+    .s { font-size: 11px; }
+    .w { fill: #fff; }
+    .box { fill: #fff; stroke: #0f172a; stroke-opacity: 0.08; }
+    .panel { fill: #f4f5f8; }
+    .bar { fill: #e1e5ec; }
+    .flow { fill: none; stroke: #3B6EF6; stroke-width: 1.7; stroke-linecap: round; }
+  </style>
+
+  <rect width="880" height="516" fill="url(#bg)"/>
+  <rect width="880" height="516" fill="url(#glow)"/>
+
+  <!-- 1 Work in a conversation -->
+  <circle cx="33" cy="28" r="9" fill="url(#tile)"/>
+  <text class="num" x="33" y="32" text-anchor="middle">1</text>
+  <text class="step" x="49" y="32.5">Work in a conversation</text>
+  <g transform="translate(24 46)">
+    <rect class="box" width="200" height="224" rx="14" filter="url(#card)"/>
+    <text x="16" y="27" style="font-size: 12px; font-weight: 600">Login bug on phones</text>
+    <path d="M0 42H200" stroke="#0f172a" stroke-opacity="0.07"/>
+    <rect x="38" y="58" width="150" height="26" rx="13" fill="#eef1f6"/>
+    <text class="s" x="50" y="75">Login buttons are off</text>
+    <rect class="bar" x="16" y="100" width="168" height="7" rx="3.5"/>
+    <rect class="bar" x="16" y="114" width="150" height="7" rx="3.5"/>
+    <rect class="bar" x="16" y="128" width="96" height="7" rx="3.5"/>
+    <rect x="16" y="146" width="62" height="21" rx="10.5" fill="#3B6EF6" fill-opacity="0.11"/>
+    <text class="s" x="27" y="160.5" style="font-weight: 600; fill: #2552d8">PR #42</text>
+    <rect x="72" y="182" width="116" height="26" rx="13" fill="#eef1f6"/>
+    <text class="s" x="84" y="199">The review is in</text>
+  </g>
+
+  <text class="c" x="257" y="139" text-anchor="middle" style="font-size: 10.5px">after each</text>
+  <text class="c" x="257" y="152" text-anchor="middle" style="font-size: 10.5px">reply</text>
+  <path class="flow" d="M232 162H282" marker-end="url(#arrow)"/>
+
+  <!-- 2 A model writes its mainline -->
+  <circle cx="299" cy="28" r="9" fill="url(#tile)"/>
+  <text class="num" x="299" y="32" text-anchor="middle">2</text>
+  <text class="step" x="315" y="32.5">A model writes its mainline</text>
+  <g transform="translate(290 46)">
+    <rect width="276" height="224" rx="18" fill="url(#tile)" filter="url(#lift)"/>
+    <text class="w" x="20" y="28" style="font-size: 10.5px; font-weight: 600; fill-opacity: 0.78; letter-spacing: 0.1em">MAINLINE</text>
+    <text class="w" x="256" y="28" text-anchor="end" style="font-size: 11.5px; font-weight: 600; fill-opacity: 0.85">◆ 2/4</text>
+    <text class="w" x="20" y="52" style="font-size: 14.5px; font-weight: 600">Fix the login page layout</text>
+    <text class="w" x="20" y="70" style="font-size: 14.5px; font-weight: 600">on narrow screens</text>
+    <rect x="20" y="82" width="66" height="21" rx="10.5" fill="#fff" fill-opacity="0.17"/>
+    <text class="w s" x="30" y="96.5">shop-web</text>
+    <rect x="92" y="82" width="74" height="21" rx="10.5" fill="#fff" fill-opacity="0.17"/>
+    <text class="w s" x="102" y="96.5">login-page</text>
+    <rect x="172" y="82" width="58" height="21" rx="10.5" fill="#fff" fill-opacity="0.17"/>
+    <text class="w s" x="182" y="96.5">PR #42</text>
+    <!-- the mainline: reached, current (amber), planned, as in the icon -->
+    <path d="M28 136V155M28 172V192" stroke="#fff" stroke-opacity="0.5" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="28" cy="130" r="5.5" fill="#fff"/>
+    <text class="w" x="46" y="134.5" style="font-size: 12.5px">Open PR #42</text>
+    <text class="w" x="256" y="134.5" text-anchor="end" style="font-size: 11px; fill-opacity: 0.72">reached</text>
+    <circle cx="28" cy="164" r="8.5" fill="#FBBF24"/>
+    <text class="w" x="46" y="168.5" style="font-size: 12.5px; font-weight: 600">Address the review</text>
+    <text class="w" x="256" y="168.5" text-anchor="end" style="font-size: 11px; font-weight: 600; fill: #FBBF24">current</text>
+    <text class="w" x="46" y="186" style="font-size: 11px; fill-opacity: 0.8">▸ Doing: reply, update the screenshots</text>
+    <circle cx="28" cy="204" r="5.5" fill="none" stroke="#fff" stroke-width="2"/>
+    <text class="w" x="46" y="208.5" style="font-size: 12.5px; fill-opacity: 0.75">Merge and verify</text>
+    <text class="w" x="256" y="208.5" text-anchor="end" style="font-size: 11px; fill-opacity: 0.6">planned</text>
+  </g>
+
+  <path class="flow" d="M574 158C592 158 590 100 606 100" marker-end="url(#arrow)"/>
+  <path class="flow" d="M574 158C592 158 590 216 606 216" marker-end="url(#arrow)"/>
+
+  <!-- 3 See it anywhere -->
+  <circle cx="621" cy="28" r="9" fill="url(#tile)"/>
+  <text class="num" x="621" y="32" text-anchor="middle">3</text>
+  <text class="step" x="637" y="32.5">See it at a glance</text>
+  <g transform="translate(614 46)">
+    <rect class="box" width="242" height="108" rx="14" filter="url(#card)"/>
+    <text class="h" x="16" y="30">Hover card</text>
+    <text class="c" x="16" y="53">Rest the pointer on</text>
+    <text class="c" x="16" y="70">a conversation to see</text>
+    <text class="c" x="16" y="87">its mainline</text>
+    <rect class="panel" x="144" y="18" width="44" height="72" rx="7"/>
+    <rect class="bar" x="150" y="27" width="30" height="6" rx="3"/>
+    <rect x="147" y="39" width="38" height="15" rx="4.5" fill="#dfe4ec"/>
+    <rect x="151" y="44" width="24" height="5" rx="2.5" fill="#9aa3b2"/>
+    <rect class="bar" x="150" y="62" width="28" height="6" rx="3"/>
+    <rect class="bar" x="150" y="75" width="22" height="6" rx="3"/>
+    <rect x="170" y="24" width="58" height="62" rx="8" fill="#fff" stroke="#0f172a" stroke-opacity="0.12" filter="url(#card)"/>
+    <rect x="177" y="32" width="40" height="5" rx="2.5" fill="#1f2328" fill-opacity="0.75"/>
+    <path d="M182 46V54M182 63V71" stroke="#cfd5de" stroke-width="1.4"/>
+    <circle cx="182" cy="44" r="2.8" fill="#15803d"/>
+    <rect x="189" y="42" width="30" height="4" rx="2" fill="#c4cad4"/>
+    <circle cx="182" cy="58" r="3.6" fill="#3B6EF6"/>
+    <rect x="189" y="56" width="27" height="4.5" rx="2.25" fill="#6d7686"/>
+    <circle cx="182" cy="75" r="2.8" fill="none" stroke="#9aa3b2" stroke-width="1.3"/>
+    <rect x="189" y="73" width="22" height="4" rx="2" fill="#d6dbe3"/>
+  </g>
+  <g transform="translate(614 162)">
+    <rect class="box" width="242" height="108" rx="14" filter="url(#card)"/>
+    <text class="h" x="16" y="30">The overview page</text>
+    <text class="c" x="16" y="53">Every conversation,</text>
+    <text class="c" x="16" y="70">grouped by time and</text>
+    <text class="c" x="16" y="87">editable in place</text>
+    <rect class="panel" x="160" y="18" width="68" height="72" rx="7"/>
+    <circle cx="169" cy="33" r="2.8" fill="#3B6EF6"/>
+    <rect x="176" y="30.5" width="30" height="5" rx="2.5" fill="#6d7686"/>
+    <rect x="211" y="31" width="10" height="4" rx="2" fill="#aab2bf"/>
+    <path d="M164 43H224" stroke="#0f172a" stroke-opacity="0.07"/>
+    <circle cx="169" cy="54" r="2.8" fill="#f59e0b"/>
+    <rect x="176" y="51.5" width="26" height="5" rx="2.5" fill="#6d7686"/>
+    <rect x="211" y="52" width="10" height="4" rx="2" fill="#aab2bf"/>
+    <path d="M164 64H224" stroke="#0f172a" stroke-opacity="0.07"/>
+    <circle cx="169" cy="75" r="2.8" fill="#9aa3b2"/>
+    <rect x="176" y="72.5" width="32" height="5" rx="2.5" fill="#6d7686"/>
+    <rect x="211" y="73" width="10" height="4" rx="2" fill="#aab2bf"/>
+  </g>
+
+  <!-- It also keeps track of -->
+  <text class="step" x="24" y="306">It also keeps track of</text>
+  <path d="M180 301.5H856" stroke="#1E41B0" stroke-opacity="0.15"/>
+
+  <g transform="translate(24 320)">
+    <rect class="box" width="264" height="172" rx="14" filter="url(#card)"/>
+    <rect class="panel" x="12" y="12" width="240" height="76" rx="10"/>
+    <circle cx="27" cy="31" r="3" fill="#3B6EF6"/>
+    <text class="s" x="37" y="35" style="font-weight: 600">Fix the login page layout</text>
+    <text class="s" x="37" y="56" style="fill: #5f6670">⑂ Sign-up page breaks too</text>
+    <rect x="181" y="43" width="66" height="19" rx="5" fill="#2563eb"/>
+    <text x="214" y="56.5" text-anchor="middle" style="font-size: 10.5px; font-weight: 500; fill: #fff">Open child</text>
+    <path d="M27 36V72H40" fill="none" stroke="#aab2bf" stroke-width="1.3" stroke-linecap="round"/>
+    <circle cx="47" cy="72" r="3" fill="#3B6EF6"/>
+    <text class="s" x="56" y="76">Check iPad landscape (child)</text>
+    <g transform="translate(16 104)" fill="none" stroke="#3B6EF6" stroke-width="1.6" stroke-linecap="round"><path d="M3.5 2.5V13.5M3.5 9.5C3.5 6 11 7.5 11 3.5"/><circle cx="3.5" cy="2.5" r="1.1" fill="#3B6EF6"/><circle cx="11" cy="3.2" r="1.1" fill="#3B6EF6"/><circle cx="3.5" cy="13.5" r="1.1" fill="#3B6EF6"/></g>
+    <text class="h" x="34" y="117">Child conversations</text>
+    <text class="c" x="16" y="139">A new problem becomes a spin-off;</text>
+    <text class="c" x="16" y="157">open it as a child from the card</text>
+  </g>
+
+  <g transform="translate(308 320)">
+    <rect class="box" width="264" height="172" rx="14" filter="url(#card)"/>
+    <rect class="panel" x="12" y="12" width="240" height="76" rx="10"/>
+    <rect x="104" y="18" width="58" height="23" rx="6.5" fill="#1f1f1f"/>
+    <text x="114" y="33.5" style="font-size: 11px; fill: #f5c518">★</text>
+    <text x="128" y="34" style="font-size: 11px; font-weight: 600; fill: #fff">Save</text>
+    <rect class="bar" x="26" y="52" width="210" height="7" rx="3.5"/>
+    <rect class="bar" x="26" y="68" width="170" height="7" rx="3.5"/>
+    <rect x="86" y="48" width="152" height="15" rx="2" fill="#4176e6" fill-opacity="0.24"/>
+    <rect x="24" y="64" width="120" height="15" rx="2" fill="#4176e6" fill-opacity="0.24"/>
+    <text class="h" x="16" y="117"><tspan style="fill: #f2b200">★</tspan> Replies worth keeping</text>
+    <text class="c" x="16" y="139">Select a passage and click ★ Save;</text>
+    <text class="c" x="16" y="157">find it in Favorites, jump back to it</text>
+  </g>
+
+  <g transform="translate(592 320)">
+    <rect class="box" width="264" height="172" rx="14" filter="url(#card)"/>
+    <rect class="panel" x="12" y="12" width="240" height="76" rx="10"/>
+    <text x="21" y="36" style="font-size: 12px">🔔</text>
+    <rect x="40" y="20" width="200" height="23" rx="6" fill="#fff" stroke="#0f172a" stroke-opacity="0.08"/>
+    <text class="s" x="52" y="35.5">Payment SDK upgrade</text>
+    <rect x="40" y="50" width="200" height="28" rx="7" fill="#FBBF24" fill-opacity="0.2"/>
+    <text class="s" x="50" y="68"><tspan style="font-weight: 600; fill: #2552d8">PR #45</tspan><tspan style="fill: #8a4b05"> Merged · 1 h ago</tspan></text>
+    <text class="h" x="16" y="117"><tspan style="font-size: 12.5px">🔔</tspan> PR and issue news</text>
+    <text class="c" x="16" y="139">A review, merge or comment on your</text>
+    <text class="c" x="16" y="157">PR puts a 🔔 on its conversation</text>
+  </g>
+</svg>

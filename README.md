@@ -12,8 +12,22 @@
 
 在多个对话之间来回切换，注意力会被削弱：处理一个问题时看到新问题，下意识就在同一个对话里接着做了；一个问题开了好几个对话，最后记不清哪个做到了哪一步；值得留下的回复散在各处，过后也找不回来。第二大脑替你记着：每个对话在做什么、做到哪一步、哪段回复值得留下。每个对话都有一条看得见的主线。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hover-dark-zh.png">
+  <img src="docs/images/hover-zh.png" alt="侧栏悬停卡片：鼠标停在侧栏的对话「登录页在手机上错位」上，旁边的卡片显示它的主线「修复登录页在窄屏下错位」、标签、4 个里程碑里已达成 2 个、当前阶段正在做的支线任务、一个可以开成子对话的引申问题、一个子对话，以及 PR #42 的新评论；另一个对话「升级支付 SDK」的行上挂着 🔔。">
+</picture>
+
+<sub>鼠标停在侧栏的对话上，旁边弹出它的主线：里程碑（✓ 已达成、● 当前、○ 计划）、正在做的支线任务、引申问题和子对话，最上面是 PR 的新动态；有新动态的对话行上挂着 🔔。图中的对话、PR 和仓库都是虚构的示例。</sub>
+
+![第二大脑怎么工作：1 在对话里工作；2 每轮回复后，模型写下主线：标题、标签和里程碑（已达成、当前、计划）；3 在侧栏悬停卡片和总览页里一眼看到。它还记着：引申问题开成的子对话、收藏的回复，以及 PR 与 Issue 的新动态。](docs/images/how-it-works-zh.png)
+
 - **一个对话一条主线，由模型凝练。** 主线写这个对话在做什么，并配上有辨识度的标签，例如「修复登录页在窄屏下错位」#shop-web #登录页 #PR #42。每轮回复结束后一两分钟内，插件调用小模型读这个对话，写出标题和标签，并识别里程碑节点：哪些阶段已经达成，现在在哪一阶段，接下来计划做什么。看出目标已完成或已放下时把对话标为已完成，超过 7 天没动的标为暂停；你手动设过状态或 Agent 正在做一项支线任务时不改状态。默认「跟随对话」：Claude Code 的对话用 Claude Haiku（经你已登录的 Claude Code），Codex 的对话用 Codex。其他 Agent（如 pi、DeepSeek、Grok）的对话默认不发给任何模型；要凝练它们，在设置里为它们选一个模型。找不到 `claude` 或 `codex` 命令时，这次凝练报错，不会改用另一家。你在总览页手动改过的标题、标签和里程碑保持不动，已达成的里程碑不会被撤销。你删掉的主线不会被自动凝练或整理旧对话写回来，除非你再点「立即凝练」「建立主线」，或者 Agent 运行 `mainline new`。
 - **里程碑和支线任务。** 主线下面是里程碑，也就是阶段性成果：✓ 已达成、● 当前、○ 计划。两个里程碑之间是具体的支线任务，由对话里的 Agent 边做边记。一条主线最多 30 个里程碑：都已达成、又要开新阶段时，最早达成的一个（先挑你没加过、没改过名的）让出位置，它没做完的支线任务跟到新阶段；手动加第 31 个时会提示已满。
+
+![总览页「第二大脑」的「对话」页签：顶部是找回对话的搜索框，下面按状态（进行中、暂停、已完成、没有主线）和时间（今天、昨天）分组，每行显示当前里程碑和进度；展开的「更新部署文档」列出已达成、当前和计划中的里程碑，当前里程碑下有支线任务和正在做的事。](docs/images/overview-zh.png)
+
+<sub>总览页的「对话」页签：按时间或项目分组，每行是当前里程碑和进度；展开一个对话，可以达成里程碑、加支线任务、处理引申问题。</sub>
+
 - **整理旧对话。** 在总览页「设置」里点「整理旧对话：最多把 N 个对话发给模型」，3 秒内再点一次确认（也可以运行 `mainline summarize --all`），插件在后台把旧对话凝练一遍，已按最新内容凝练过的跳过。每次整理里每个对话最多发送一次：发送前记在 `backfill-tried.json`，重启后也不重发，失败的不再重试（整理结束或停止时删掉这个文件）。主线已有 2000 条时，整理不再给没有主线的对话新建主线，这些对话不发送，进度里写明有几个。N 是真正会发给模型的对话数，不含按设置不发送的其他 Agent 的对话，也不含因主线已满不发送的对话。总览页显示进度，随时可以点「停止」：正在进行的那次做完，其余不再发送。关掉自动凝练不影响你开始的整理。
 - **侧栏悬停就能看。** 鼠标在侧栏的对话上停 0.4 秒，旁边弹出这个对话的主线、里程碑节点和当前的支线任务，不用点开。停留时行上还显示进度，例如 ◆ 2/4。Codex Desktop 和 codexhost Web 自己也会弹出会话预览，主线卡片会排在预览的下面或旁边，不会叠在一起。
 - **可选的主线胶囊。** 默认只在侧栏悬停时显示主线。在设置里打开「对话标题栏也显示主线胶囊」后，标题栏会多一枚胶囊，显示主线、当前里程碑、正在做的支线任务和进度，点开可以达成阶段、加支线任务、改标题和标签。
@@ -21,6 +35,18 @@
 - **还没凝练的对话标「未凝练」。** 比如新对话的第一轮还没结束、装插件以前就有且之后没再用过的对话（可用「整理旧对话」一次凝练）、关掉自动凝练以后的对话、当天 200 次自动凝练用完以后的对话、凝练失败后等着重试的对话（30 分钟后重试，之后每次间隔加倍，最长 8 小时；对话有新回复或点「立即凝练」时马上重试）、主线已满 2000 条又没有能让出位置的主线时的新对话、你删掉主线的对话、读不出内容的对话，以及按设置不发给模型的其他 Agent 的对话。这时卡片上的标题、标签和起因由对话标题、第一句话、工作区和提到的 PR 拼出来，不调用模型，也不写入文件。开着自动凝练时，对话有新回复后一两分钟内模型会凝练它；也可以在悬停卡片里点「立即凝练」。其他 Agent 的对话没有选模型时，点「立即凝练」会在卡片里说明是哪项设置。
 - **用线索找对话。** 输入编号、链接、标签、关键词、里程碑或当时问的话，都能找到对应的对话并跳过去。
 - **PR 与 Issue 的回复提醒。** 插件会扫描 codexhost 的全部对话，记下每个 GitHub PR 和 issue 来自哪个对话、第几轮，以及当时你问的话。有人评审、合并或评论 #42 时，侧栏里提出它的那个对话行上会挂一个 🔔，悬停时卡片最上面显示这条新动态，总览页「PR 与 Issue」页签里它排在最前。只有有人评审、合并或发了新评论才提醒；机器人（如 CodeRabbit）的评论和评审、改评论、CI 结果，以及你自己的操作都不提醒。
+
+![总览页的「PR 与 Issue」页签：有新动态的 PR #42（有新评论）和 PR #45（已合并）排在最前，每条写明来源对话、第几轮和当时的问题。](docs/images/prs-zh.png)
+
+<sub>「PR 与 Issue」页签：有人评审、合并或评论的排在最前，写明来自哪个对话的第几轮、当时问了什么，点「跳转」回到那个对话。</sub>
+
+- **收藏值得留下的回复。** 选中回复里的一段，点弹出的「★ 收藏」；总览页的「收藏」页签记着每段话的出处，点「跳回原文」就打开那个对话并高亮这段话。详见下面「使用」第 6 步。
+
+![在对话里选中回复的一句话后，codexhost Web 自己的「添加到对话 | 添加批注」浮条旁边出现「★ 收藏」按钮。](docs/images/save-zh.png)
+
+![总览页的「收藏」页签：每段收藏写明来自哪个对话、第几轮、谁说的；第一段带备注，第二段是 Agent 存下的整条回复，按 Markdown 排版；每段都有「跳回原文」。](docs/images/favorites-zh.png)
+
+<sub>上：选中回复里的一段，「★ 收藏」出现在 codexhost Web 自己的浮条旁边。下：总览页的「收藏」页签，Agent 存下的整条回复按 Markdown 排版。</sub>
 
 支持 Codex Desktop，以及 codexhost 自带窗口和 Web。
 
@@ -124,8 +150,22 @@ Agent 使用的命令装在 `~/.codexhost/host-extension-data/second-brain/bin/m
 
 Switching between many conversations wears attention thin: a new problem spotted halfway through a task gets handled in the same conversation, and one task spreads over several conversations until nobody remembers which one got where, while the replies worth keeping end up scattered. Second Brain remembers what each conversation is doing, how far it got, and which replies are worth keeping: every conversation gets a visible mainline.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hover-dark-en.png">
+  <img src="docs/images/hover-en.png" alt="The sidebar hover card: with the pointer resting on the conversation “Login bug on phones” in the sidebar, a card beside it shows its mainline “Fix the login page layout on narrow screens”, its tags, 2 of its 4 milestones reached, the task in progress at the current stage, a spin-off that can become a child conversation, a child conversation, and a new comment on PR #42; another conversation, “Payment SDK upgrade”, has a 🔔 on its row.">
+</picture>
+
+<sub>Rest the pointer on a conversation in the sidebar and its mainline shows beside it: milestones (✓ reached, ● current, ○ planned), the task in progress, spin-offs and child conversations, with PR news on top; a conversation with news has a 🔔 on its row. The conversations, PRs and repository in the images are made up.</sub>
+
+![How Second Brain works: 1 you work in a conversation; 2 after each reply, a model writes its mainline: a title, tags and milestones (reached, current, planned); 3 you see it at a glance in the sidebar hover card and on the overview page. It also keeps track of spin-offs opened as child conversations, saved replies, and news about PRs and issues.](docs/images/how-it-works-en.png)
+
 - **One conversation, one mainline, written by a model.** The mainline says what the conversation is doing, with tags that make it easy to recognize, such as "Fix the login page layout on narrow screens" #shop-web #login-page #PR #42. A minute or two after each reply, a small model reads the conversation, writes the title and tags, and finds the milestones: which stages are reached, which one is in progress, what is planned next. It also marks a conversation done when its goal looks reached or dropped, and paused after 7 quiet days, except when you set the status by hand or an agent is in the middle of a task. By default the model follows the conversation: Claude Code conversations use Claude Haiku (through your Claude Code login), Codex conversations use Codex. Conversations of other agents (pi, DeepSeek, Grok, …) go to no model by default; choose a model for them in the settings to summarize them. When the `claude` or `codex` command is missing, that summary fails with an error; it never goes to the other provider instead. Titles, tags and milestones you edit in the overview stay, and reached milestones are never undone. A mainline you delete is not brought back by automatic summaries or the backfill, unless you select **Summarize now** or **Create mainline** again, or an agent runs `mainline new`.
 - **Milestones and tasks.** Under the mainline are milestones, the results of each stage: ✓ reached, ● current, ○ planned. Between two milestones are the concrete tasks, which the agent in the conversation records as it works. A mainline has at most 30 milestones: when all are reached and a new stage begins, the earliest reached one (one you did not add or rename, when there is one) makes room, and its unfinished tasks go on in the new stage; adding a 31st by hand says the mainline is full.
+
+![The Conversations tab of the Second Brain page: a search box to find a conversation, then the conversations by status (Active, Paused, Done, No mainline) and by time (Today, Yesterday), each line with its current milestone and progress; “Update the deployment guide” is open, with its reached, current and planned milestones and the tasks of the current one.](docs/images/overview-en.png)
+
+<sub>The overview's Conversations tab: grouped by time or by project, each line with its current milestone and progress; open one to reach a milestone, add tasks or handle spin-offs.</sub>
+
 - **Older conversations.** In the overview's **Settings**, select **Summarize older conversations: send up to N to the model** and select it again within 3 seconds to confirm (or run `mainline summarize --all`). The extension then summarizes the older conversations in the background, skipping those already summarized as they are now. One backfill sends each conversation at most once: it is written down in `backfill-tried.json` before it is sent, so a restart sends none again, and one that failed is not retried (the file is deleted when the backfill finishes or stops). Once there are 2,000 mainlines, the backfill gives no conversation a new mainline: those are not sent, and the progress says how many. N is what it will really send to a model; other agents' conversations that the settings keep from models are not counted, nor those left out because the mainlines are full. The overview shows the progress, and **Stop** ends it at any time: a summary in progress finishes, nothing else is sent. Turning automatic summaries off does not stop a backfill you started.
 - **A glance from the sidebar.** Rest the pointer on a conversation in the sidebar for 0.4 seconds and its mainline, milestones and current tasks appear beside it, without opening it. The row also shows the progress, such as ◆ 2/4. Codex Desktop and codexhost Web show their own preview of the conversation too; the mainline card goes under it or beside it instead of on top.
 - **An optional capsule.** By default the mainline shows only on hover in the sidebar. Turn on **Also show the mainline capsule in the conversation header** to get a capsule with the mainline, the current milestone, the task in progress and the progress; select it to reach a milestone, add tasks, or edit the title and tags.
@@ -133,6 +173,18 @@ Switching between many conversations wears attention thin: a new problem spotted
 - **"Not summarized" until a model has written the mainline.** For example while a new conversation's first turn runs, for conversations from before the extension that were not used since (**Summarize older conversations** does them at once), after automatic summaries are turned off, once the day's 200 automatic summaries are used up, while a failed summary waits for its next try (after 30 minutes, then twice as long each time up to 8 hours; at once after a new reply or **Summarize now**), for a new conversation when there are 2,000 mainlines and none can make room, for a conversation whose mainline you deleted, one that cannot be read, or another agent's conversation the settings keep from models. The card then shows a title, tags and origin taken from its title, first message, workspace and the PRs it mentions. This uses no model and saves nothing. With automatic summaries on, a model summarizes a conversation a minute or two after a new reply; or select **Summarize now** in the hover card. For another agent's conversation with no model chosen, **Summarize now** says in the card which setting decides.
 - **Find a conversation by any clue.** A number, link, tag, words, milestone or what you asked there finds the conversation and takes you to it.
 - **Replies to your PRs and issues.** The extension reads every codexhost conversation and records which conversation and turn each GitHub PR and issue came from, and what you asked there. When someone reviews, merges or comments on #42, the sidebar row of the conversation it came from gets a 🔔, its hover card shows the news first, and it moves to the top of the overview's **PRs and issues** tab. Only a review, a merge or a new comment by a person rings it: comments and reviews by bots such as CodeRabbit, edited comments, CI results and your own actions do not.
+
+![The PRs and issues tab of the overview: PR #42 (new comment) and PR #45 (merged) have news and come first; each says which conversation and turn it came from and what was asked then.](docs/images/prs-en.png)
+
+<sub>The PRs and issues tab: those with a review, a merge or a new comment come first, each with the conversation and turn it came from and what you asked there; Go takes you back to that conversation.</sub>
+
+- **Keep the replies worth keeping.** Select a passage of a reply and click the **★ Save** button that appears; the overview's **Favorites** tab keeps each passage with where it came from, and **Go to passage** opens that conversation with the passage highlighted. See step 6 under **Use**.
+
+![A sentence of a reply selected in a conversation: the ★ Save button shows up beside codexhost Web's own “Add to chat | Add comment” bar.](docs/images/save-en.png)
+
+![The Favorites tab of the overview: each saved passage says which conversation, turn and speaker it came from; the first has a note, the second is a whole reply the agent saved, laid out from its Markdown; each has Go to passage.](docs/images/favorites-en.png)
+
+<sub>Above: select a passage of a reply, and ★ Save shows up beside codexhost Web's own bar. Below: the overview's Favorites tab, where a whole reply saved by the agent is laid out from its Markdown.</sub>
 
 Works in Codex Desktop and in codexhost's own window and Web.
 
@@ -228,11 +280,14 @@ Files kept on this machine (the JSON files are written compactly):
 
 ```sh
 npm ci
-npm run check     # type check, tests and build
-npm run package   # dist/second-brain.zip
+npm run check        # type check, tests and build
+npm run package      # dist/second-brain.zip
+npm run screenshots  # the README images in docs/images (needs Google Chrome)
 ```
 
 The built entries (`desktop.js`, `web/`, `page/`, `backend/`, `bin/`) are committed so codexhost can install straight from the repository (GitHub's source archive of a branch) as well as from `dist/second-brain.zip`, which also carries the license texts (`LICENSE` and `COPYING.txt`). codexhost takes only some file names in a package (a known suffix such as `.js`, `.md` or `.txt`, or names such as `LICENSE`) and refuses the whole package for any other; `test/package.test.ts` checks the zip and every file git tracks against codexhost's rules. The test run sets `MAINLINE_NO_MODEL=1`, which refuses every model call before any tool is looked for or started, and counts none; it is a switch for tests and development runs and does not reach the installed backend, which codexhost starts without your environment. What changed in each version is in [CHANGELOG.md](CHANGELOG.md). See [CONTRIBUTING.md](CONTRIBUTING.md) and, for security problems, [SECURITY.md](SECURITY.md).
+
+The images in this README are drawn by `npm run screenshots` in headless Google Chrome from the extension's own interface code (the overview page, the hover card and the ★ Save button), fed with made-up demo data; only the codexhost window around them is a plain mock (`scripts/screenshots/`). The diagrams are the SVG files beside them in `docs/images/`.
 
 ## License
 

@@ -12,7 +12,8 @@
     "package": "node scripts/build.mjs --zip",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run typecheck && npm test && npm run build",
+    "screenshots": "node scripts/screenshots/run.mjs"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

@@ -10,13 +10,15 @@ You need Node.js 22 or later (CI runs on 24).
 
 ```sh
 npm ci
-npm run check     # type check, tests and build
-npm run package   # dist/second-brain.zip
+npm run check        # type check, tests and build
+npm run package      # dist/second-brain.zip
+npm run screenshots  # the README images in docs/images (needs Google Chrome)
 ```
 
 - `src/` holds the extension and `test/` its tests.
 - `desktop.js`, `web/`, `page/`, `backend/` and `bin/` are built from `src/`. Commit them with your change; CI checks that they match the source.
 - The tests never call a model: the test run sets `MAINLINE_NO_MODEL=1`, and the tests of the model runner use stand-in tools. Keep it that way.
+- The README images in `docs/images/` are drawn by `npm run screenshots` from the extension's own interface code with the made-up demo data of `scripts/screenshots/`; the diagrams are hand-written SVG files in `docs/images/` too. After a visible change, draw them again and look at each one before you commit it. Images only ever show made-up data: never take a screenshot of your own codexhost.
 
 ## Try it in codexhost
 
@@ -52,13 +54,15 @@ Contributions are licensed under [LGPL-3.0-only](LICENSE) (with the GPL-3.0 text
 
 ```sh
 npm ci
-npm run check     # 类型检查、测试和构建
-npm run package   # 生成 dist/second-brain.zip
+npm run check        # 类型检查、测试和构建
+npm run package      # 生成 dist/second-brain.zip
+npm run screenshots  # 画 README 里的图（docs/images），需要 Google Chrome
 ```
 
 - `src/` 是插件源码，`test/` 是对应的测试。
 - `desktop.js`、`web/`、`page/`、`backend/` 和 `bin/` 由 `src/` 构建而来，请随改动一起提交；CI 会检查它们与源码一致。
 - 测试从不调用模型：测试运行时设置了 `MAINLINE_NO_MODEL=1`，模型调用本身的测试用替身工具。请保持这一点。
+- README 里的图（`docs/images/`）由 `npm run screenshots` 用插件自己的界面代码和 `scripts/screenshots/` 里虚构的示例数据画出来，示意图是 `docs/images/` 里手写的 SVG。界面有变化时重新画一遍，提交前每张图都看一遍。图里只能是虚构的数据：不要截自己的 codexhost。
 
 ## 在 codexhost 中试用
 
