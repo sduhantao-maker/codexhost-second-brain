@@ -1,5 +1,23 @@
 # 更新记录 / Changelog
 
+## 0.10.3
+
+修了 PR 与 Issue 的 🔔 自己消失、或者根本看不到的问题。以前打开（或切换到）提出它的对话就算看过了：可主线胶囊默认关闭，打开对话时看不到任何新动态；同时开着两个停在不同对话上的 Web 页面（codexhost 窗口和浏览器标签页）时，每次轮询都算一次切换，🔔 几秒内就被清掉。现在 🔔 只在你处理它时消失：🔔 或悬停卡片里的新动态显示着时点这个对话的侧栏行，在卡片里点「知道了」，在下面说的列表里点「打开对话」或「知道了」，或在「PR 与 Issue」页签里点「跳转」。后台按窗口分别记每个窗口打开的对话，几个窗口停在不同对话上不再算切换。🔔 现在要等你处理才消失，所以同时挂 🔔 的 PR 和 issue 从最多 10 个放宽到 50 个，免得还没处理的被挤掉。
+
+对话在侧栏里没有看得见的行时（在收起的分组里、滚出了列表或没有列出），它的 🔔 以前画不出来。现在侧栏顶部显示「🔔 N」，N 是这样的新动态有几条，放在不遮住侧栏文字和按钮的地方；点它列出这些新动态（仓库和编号、标题、发生了什么、什么时候、来自哪个对话），每条可以「打开对话」或「知道了」。看得见的行照旧挂自己的 🔔。
+
+有 Codex Desktop 或 codexhost 的窗口开着时，GitHub 通知改为每分钟读一次（原来每 3 分钟），窗口都关掉或隐藏 10 分钟后仍是每 10 分钟一次。README 原来说「最近 10 分钟用过插件界面时」，其实每个开着的窗口都让插件算在用，现在照实写明。
+
+还修了一处：新版 Codex Desktop（在 26.1120 上确认）鼠标停在侧栏对话上时弹出的会话预览换了做法，预览本身是个没有大小的弹层，看得见的部分是里面单独定位的一块。插件认不出它，主线卡片没有让开，被预览盖住了一截。现在新旧两种预览都认得出，卡片照旧排在预览下面或旁边。
+
+Fixed the 🔔 on news about PRs and issues going away by itself, or never showing. Opening (or switching to) the conversation a PR came from used to count as seeing its news, although the capsule is off by default and opening the conversation showed none of it; and with two Web pages open on different conversations (the codexhost window and a browser tab), every poll counted as a switch and cleared the bells within seconds. A 🔔 now goes away only when you act on it: select the conversation's sidebar row while its 🔔 or the news in its hover card shows, select Got it in the card, Open conversation or Got it in the list described below, or Go in the PRs and issues tab. The backend keeps the conversation open in each window apart, so windows on different conversations no longer count as switching. Since a 🔔 now waits for you, up to 50 PRs and issues carry one at a time (it was 10), so that none is pushed out before you get to it.
+
+When a conversation with news had no row in sight in the sidebar (in a collapsed group, scrolled away, or not listed), its 🔔 could not be drawn. Now a 🔔 N at the top of the sidebar counts such news, placed where it covers none of the sidebar's text and buttons; select it to list that news (repository and number, title, what happened and when, the conversation it came from), each with Open conversation and Got it. Rows in sight keep their own 🔔.
+
+GitHub notifications are now read every minute (it was every 3 minutes) while a Codex Desktop or codexhost window is open, and still every 10 minutes once all of them have been closed or hidden for 10 minutes. The README used to say "when its views were used in the last 10 minutes"; in fact every open window keeps the extension in use, and the README now says so.
+
+Also fixed: newer Codex Desktop (seen in 26.1120) builds the conversation preview it shows when the pointer rests on a sidebar row differently: the preview itself is a popover with no size, and what shows is a child placed on its own. The extension did not recognize it, the hover card did not make room, and the preview covered part of the card. Both kinds of preview are recognized now, and the card goes under or beside the preview as before.
+
 ## 0.10.2
 
 插件介绍和 README 开头加上一句「有限的注意力，迅速收回。」，末尾加上反馈渠道和 Star 邀请；插件市场列表里的简介也以这句开头。README 写明在 codexhost 0.26.0 上测试过。

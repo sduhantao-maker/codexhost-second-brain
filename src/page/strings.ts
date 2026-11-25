@@ -439,7 +439,7 @@ const zh: PageStrings = {
   expandPassage: "展开全文",
   foldPassage: "收起",
   refsIntro:
-    "所有在 codexhost 对话里出现过的 GitHub PR 和 issue：来自哪个对话、当时为了解决什么问题。有人评审、合并或评论时，这里排在最前，侧栏里提出它的对话行上挂 🔔，悬停卡片最上面也会显示；打开了主线胶囊时胶囊上也会提醒。",
+    "所有在 codexhost 对话里出现过的 GitHub PR 和 issue：来自哪个对话、当时为了解决什么问题。有人评审、合并或评论时，这里排在最前，侧栏里提出它的对话行上挂 🔔（这个对话在侧栏里看不到时，算进侧栏顶部的「🔔 N」），悬停卡片最上面也会显示；打开了主线胶囊时胶囊上也会提醒。在这里点「跳转」、在卡片里点「知道了」或在 🔔 显示着时点那一行，🔔 才消失。",
   refsEmpty: "还没有找到 PR 或 issue。扫描完成后，这里会列出对话里出现过的链接。",
   findRefs: "找 PR / Issue",
   refsPlaceholder: "输入编号、链接或关键词，例如 42",
@@ -520,7 +520,7 @@ const zh: PageStrings = {
   driftPolicy: "同一对话里出现新问题时",
   driftPolicies: { ask: "先问我（推荐）", note: "只记录，不打断", off: "不检查" },
   showCapsule: "对话标题栏也显示主线胶囊（切换到进行中的对话时自动展开 3 秒）",
-  prAlerts: "我经手的 PR 或 issue 在 GitHub 上有人评审、合并或评论时提醒我（用已登录的 gh，只读）",
+  prAlerts: "我经手的 PR 或 issue 在 GitHub 上有人评审、合并或评论时提醒我（用已登录的 gh，只读；有 Codex Desktop 或 codexhost 的窗口开着时每分钟查一次，否则每 10 分钟）",
 
   attachmentsSection: "附件",
   attachmentsUsage: (files, size) => `开子对话时附带的文件：${files} 个，共 ${size}`,
@@ -670,7 +670,7 @@ const en: PageStrings = {
   expandPassage: "Show all",
   foldPassage: "Show less",
   refsIntro:
-    "Every GitHub PR and issue that came up in a codexhost conversation: which conversation it came from and what it was for. When someone reviews, merges or comments, it moves to the top here, the conversation's sidebar row gets a 🔔 and its hover card shows the news first; the capsule shows it too when it is on.",
+    "Every GitHub PR and issue that came up in a codexhost conversation: which conversation it came from and what it was for. When someone reviews, merges or comments, it moves to the top here, the conversation's sidebar row gets a 🔔 (counted in the 🔔 N at the top of the sidebar when the sidebar does not show that conversation) and its hover card shows the news first; the capsule shows it too when it is on. The 🔔 goes away once you select Go here, Got it in the card, or the row while its 🔔 shows.",
   refsEmpty: "No PRs or issues found yet. Once the scan finishes, the links from your conversations show here.",
   findRefs: "Find a PR or issue",
   refsPlaceholder: "Number, link or words, for example 42",
@@ -752,7 +752,7 @@ const en: PageStrings = {
   driftPolicy: "When a new problem shows up in the same conversation",
   driftPolicies: { ask: "Ask me first (recommended)", note: "Note it, keep going", off: "Do not check" },
   showCapsule: "Also show the mainline capsule in the conversation header (it opens for 3 seconds when you switch to an active conversation)",
-  prAlerts: "Alert me when someone reviews, merges or comments on a PR or issue I worked on (uses your gh login, read only)",
+  prAlerts: "Alert me when someone reviews, merges or comments on a PR or issue I worked on (uses your gh login, read only; checks every minute while a Codex Desktop or codexhost window is open, every 10 minutes otherwise)",
 
   attachmentsSection: "Attachments",
   attachmentsUsage: (files, size) => `Files sent along with child conversations: ${plural(files, "file")}, ${size}`,

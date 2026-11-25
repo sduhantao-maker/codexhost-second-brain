@@ -7,7 +7,7 @@ import { ACTIVE_ROW_ATTRIBUTE, COMPOSER_ATTRIBUTE, currentDesktopThread, treeRep
 import type { DesktopSidebarRow } from "../src/host/types.js";
 import { freeBand } from "../src/ui/band.js";
 import { Capsule, type CapsuleModel, type CapsuleOptions } from "../src/ui/capsule.js";
-import { startController, type SurfaceAdapter } from "../src/ui/controller.js";
+import { clientId, startController, type SurfaceAdapter } from "../src/ui/controller.js";
 import { currentWebThread, openWebThread, webParents } from "../src/web/adapter.js";
 import { NOW, ref42, sampleSearchResults, sampleSnapshot, sampleView, T } from "./fixtures/v2.js";
 
@@ -388,14 +388,35 @@ describe("controller", () => {
     expect(text(shadow(), ".capsule .alert")).toBe("#42 有新动态");
     expect(versions).toEqual(["v2-sample"]);
     expect(calls.filter(([method]) => method === "conversation")).toEqual([["conversation", { threadId: T.main }]]);
-    // The first poll says which conversation is open, so the backend can mark its news as seen.
-    expect(calls[0]).toEqual(["snapshot", { focus: { threadId: T.main, surface: "desktop" }, locale: "zh-CN", localeSource: "surface" }]);
+    // The first poll says which conversation is open in this window, which it names by an id of its own.
+    expect(calls[0]).toEqual(["snapshot", { client: expect.stringMatching(/^[A-Za-z0-9-]{8,64}$/u), focus: { threadId: T.main, surface: "desktop" }, locale: "zh-CN", localeSource: "surface" }]);
+    const client = (calls[0]![1] as { client: string }).client;
     switchTo(T.child);
     await vi.advanceTimersByTimeAsync(10);
     expect(text(shadow(), ".capsule .goal")).toBe("修复手机端菜单图标和标题重叠");
     expect(shadow().querySelector(".root")!.hasAttribute("data-open")).toBe(true);
+    // The same id in every poll of this window, a different one in another window.
+    const snapshots = calls.filter(([method]) => method === "snapshot").map(([, params]) => (params as { client?: string }).client);
+    expect(snapshots.length).toBeGreaterThan(1);
+    expect(new Set(snapshots)).toEqual(new Set([client]));
+    const asked: unknown[] = [];
+    const other = startController(
+      adapterWith(async (method, params) => {
+        if (method === "snapshot") asked.push(params);
+        return method === "conversation" ? sampleView(T.main) : sampleSnapshot();
+      }).adapter,
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    other.dispose();
+    expect((asked[0] as { client?: string }).client).toMatch(/^[A-Za-z0-9-]{8,64}$/u);
+    expect((asked[0] as { client?: string }).client).not.toBe(client);
     controller.dispose();
     expect(document.querySelector("[data-codexhost-mainline]")).toBeNull();
+  });
+
+  it("names itself by a made-up id where the page cannot make a random UUID (plain http)", () => {
+    expect(clientId({ crypto: {} } as unknown as Window)).toMatch(/^[A-Za-z0-9-]{8,64}$/u);
+    expect(clientId(null)).toMatch(/^[A-Za-z0-9-]{8,64}$/u);
   });
 
   it("puts the capsule on the page only while the showCapsule setting is on, and keeps polling either way", async () => {

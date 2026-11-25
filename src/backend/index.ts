@@ -45,7 +45,6 @@ import {
   type SnapshotParams,
   type SnapshotResultV2,
   type SpawnResult,
-  type Surface,
   type TreeReport,
 } from "../core/rpc.js";
 import { searchConversations } from "../core/search.js";
@@ -74,11 +73,24 @@ import { Uploads, type IsDone } from "./uploads.js";
 const MAINTAIN_EVERY_MS = 30_000;
 const ACTIVE_WINDOW_MS = 60_000;
 const SETTINGS_TTL_MS = 3_000;
-/** Someone looked at a capsule, a hover card or the overview within this time. */
+/**
+ * The extension counts as in use for this long after a surface last asked for something. Every
+ * Desktop window and codexhost page polls the snapshot every few seconds while it is on screen
+ * (not minimized, not a background tab), so it is in use while any is open, and this long after.
+ */
 const RECENTLY_USED_MS = 10 * 60_000;
-const GITHUB_EVERY_MS = 3 * 60_000;
+/** GitHub is asked this often while the extension is in use, and every IDLE_EVERY_MS otherwise. */
+const GITHUB_EVERY_MS = 60_000;
 const IDLE_EVERY_MS = 10 * 60_000;
-const ALERTS_SHOWN = 10;
+/** A surface's id for itself (`SnapshotParams.client`): random letters, digits and dashes. */
+const CLIENT_ID = /^[A-Za-z0-9-]{8,64}$/u;
+/** The open conversation of at most this many surfaces is kept. */
+const FOCUS_LIMIT = 64;
+/**
+ * Unseen news sent with a snapshot, the newest first. A bell stays until the user acts on it, so
+ * news can pile up: each piece not sent would lose its bell (and its place in "🔔 N") unseen.
+ */
+const ALERTS_SHOWN = 50;
 /** A passage asked to be shown again is waited for this long by the conversation it is in. */
 const REVEAL_MS = 2 * 60_000;
 /** Attachments nobody opened a child conversation with are looked for this often. */
@@ -186,6 +198,8 @@ export interface BackendOptions {
   runGh?: RunGh;
   /** How long a call may wait in all (HANDLER_BUDGET_MS); tests make it short. */
   budgetMs?: number;
+  /** Told how long until the next GitHub round each time one is set; tests follow the rounds with it. */
+  githubScheduled?: (delayMs: number) => void;
 }
 
 export async function activate(ctx: BackendContext, options: BackendOptions = {}) {
@@ -259,10 +273,17 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
   let cachedIndex: { signature: string; index: RefIndex; key: string } = { signature: "", index: emptyIndex(), key: "" };
   let settings: { at: number; value: Settings } = { at: 0, value: { ...DEFAULT_SETTINGS } };
   let lastSnapshotAt = 0;
-  /** The conversation open on each surface, and when that surface last said so. */
-  const focus = new Map<Surface, { threadId: string; at: number }>();
+  /**
+   * The conversation open in each window or page (by the id it sends, else by its kind of surface),
+   * and when it last said so; the longest quiet first.
+   */
+  const focus = new Map<string, { threadId: string; at: number }>();
   /** Conversations open on a surface that still polls; a closed window stops counting after a minute. */
   const focusIds = () => [...focus.values()].filter((item) => Date.now() - item.at < ACTIVE_WINDOW_MS).map((item) => item.threadId);
+  /** Forgets the windows and pages quiet for a minute, and the quietest beyond FOCUS_LIMIT. */
+  const forgetClosed = () => {
+    for (const [key, item] of focus) if (Date.now() - item.at >= ACTIVE_WINDOW_MS || focus.size > FOCUS_LIMIT) focus.delete(key);
+  };
   let soon: ReturnType<typeof setTimeout> | undefined;
   let maintaining: Promise<void> | undefined;
 
@@ -421,16 +442,18 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       lastSnapshotAt = Date.now();
       lastUsedAt = Date.now();
       // A surface's current conversation; one whose id is no conversation id is ignored, not trusted.
+      // Opening a conversation marks none of its news seen: only the user acting on the bell does
+      // (`refs.seen`, `refs.seenForThread`).
       const focused = isRecord(params.focus) && isThreadId(params.focus.threadId) ? params.focus : undefined;
       if (focused && (focused.surface === "desktop" || focused.surface === "web")) {
-        const before = focus.get(focused.surface)?.threadId;
-        focus.set(focused.surface, { threadId: focused.threadId, at: Date.now() });
-        if (before !== focused.threadId) {
-          maintainSoon();
-          // Opening the conversation a PR came from counts as having seen its news.
-          const threadId = focused.threadId;
-          if (alerts(await currentIndex()).length) await updateIndex(refs, (draft) => markSeenForThread(draft, threadId));
-        }
+        // Each window and page on its own: two on different conversations are no change each time they take turns.
+        const client = typeof params.client === "string" && CLIENT_ID.test(params.client) ? params.client : undefined;
+        const key = client ? `${focused.surface}:${client}` : focused.surface;
+        const before = focus.get(key)?.threadId;
+        focus.delete(key);
+        focus.set(key, { threadId: focused.threadId, at: Date.now() });
+        forgetClosed();
+        if (before !== focused.threadId) maintainSoon();
       }
       let state = await currentState();
       if (params.locale !== undefined) {
@@ -875,6 +898,17 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     await updateIndex(refs, (draft) => markSeen(draft, key));
     return { ok: true };
   });
+  // The user opened a conversation from its sidebar row while its bell (or its card's news) showed:
+  // the news of every PR and issue it started is seen.
+  ctx.handle("refs.seenForThread", async (raw: unknown) => {
+    try {
+      const threadId = threadIdOf(raw);
+      const { result } = await updateIndex(refs, (draft) => markSeenForThread(draft, threadId));
+      return clean({ ok: true, keys: result });
+    } catch (error) {
+      rethrow(error);
+    }
+  });
 
   // Favorites: passages saved from conversations, listed on the overview, shown again where they are.
   ctx.handle("favorites.add", async (raw: unknown) => {
@@ -1061,8 +1095,10 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       log.error("watch GitHub", error);
     } finally {
       if (!stopped) {
-        githubTimer = setTimeout(() => void (githubRound = watchGitHub()), recentlyUsed() ? GITHUB_EVERY_MS : IDLE_EVERY_MS);
+        const delay = recentlyUsed() ? GITHUB_EVERY_MS : IDLE_EVERY_MS;
+        githubTimer = setTimeout(() => void (githubRound = watchGitHub()), delay);
         githubTimer.unref?.();
+        options.githubScheduled?.(delay);
       }
     }
   };

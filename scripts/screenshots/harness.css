@@ -1,8 +1,9 @@
 /*
  * The mock host around the extension in the README images: a plain, neutral window with a sidebar
  * of conversations and a conversation, on a soft background. None of this is the extension; the
- * hover card, the progress badge, the bells, the ★ Save button and the overview page bring their
- * own styles (src/ui/hover/styles.ts, src/ui/favorites/index.ts, page/style.css).
+ * hover card, the progress badge, the bells, the summary of news, the ★ Save button and the
+ * overview page bring their own styles (src/ui/hover/styles.ts, src/ui/favorites/index.ts,
+ * page/style.css).
  */
 
 * {
@@ -404,4 +405,140 @@ body {
   height: 72px;
   background: linear-gradient(rgba(255, 255, 255, 0), #ffffff 88%);
   pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- the summary of news (a check, not in the README) */
+
+.summary-window {
+  height: 470px;
+  min-height: 0;
+}
+
+.mock-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* codexhost Web: its name and two small buttons on top. */
+.side-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 34px;
+  margin: 0 2px 10px;
+  padding: 0 2px 0 10px;
+}
+
+.brand {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.tools {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.tool {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tool-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.side-section {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 28px;
+  margin-top: 4px;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.mock-side > .row {
+  padding-left: 10px;
+}
+
+.ws-head.folded,
+.d-project .ws-head {
+  cursor: pointer;
+}
+
+.ws-chevron {
+  width: 13px;
+  height: 13px;
+  margin-left: -4px;
+}
+
+/* Codex Desktop: the window's own buttons on top, then "New chat" and "Search", then the list. */
+.desktop-side {
+  padding-top: 0;
+}
+
+.titlebar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 44px;
+  padding: 0 2px 0 4px;
+}
+
+.lights {
+  display: flex;
+  gap: 8px;
+}
+
+.light {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+}
+
+.titlebar .tool {
+  margin-left: auto;
+}
+
+.nav-item {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--fg);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.d-scroll {
+  flex: 1;
+  min-height: 0;
+  margin-top: 8px;
+  overflow-y: auto;
+}
+
+.side-section.with-tools {
+  margin-top: 0;
+  padding-right: 2px;
 }

@@ -4,9 +4,13 @@
 // temporary folder, and photographs it in headless Chrome through the DevTools protocol (device
 // scale factor 2). The diagrams are hand-written SVGs in docs/images, photographed the same way.
 // Every page is made up of demo data (scripts/screenshots/demo.ts); nothing is read from codexhost.
+// The "summary" images are checks rather than README images: "🔔 N" at the top of a mock codexhost
+// Web and a mock Codex Desktop sidebar, closed and with its list open, written to dist/screenshots
+// (not committed) to look at after changing how it is placed.
 //
 //   npm run screenshots              all images
 //   npm run screenshots -- hover     only those whose name contains "hover"
+//   npm run screenshots -- summary   only the summary checks
 //
 // Needs Google Chrome; set CHROME to its executable when it is not in the usual place.
 import { spawn } from "node:child_process";
@@ -21,6 +25,7 @@ import { decode, optimize } from "./png.mjs";
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const here = path.join(root, "scripts", "screenshots");
 const out = path.join(root, "docs", "images");
+const checks = path.join(root, "dist", "screenshots");
 
 /** The moment the demo data is relative to: 24 November 2026, 15:30 in Shanghai. */
 const NOW = Date.parse("2026-11-24T15:30:00+08:00");
@@ -36,18 +41,23 @@ const CHROME_PATHS = [
   "/usr/bin/chromium",
 ].filter(Boolean);
 
-/** @typedef {{ scene: "hover" | "save" | "overview", locale: "zh-CN" | "en", scheme: "light" | "dark", tab?: "conversations" | "favorites" | "refs" }} Scene */
-/** @type {Array<{ name: string } & Scene>} */
+/** @typedef {{ scene: "hover" | "save" | "overview" | "summary", locale: "zh-CN" | "en", scheme: "light" | "dark", tab?: "conversations" | "favorites" | "refs", surface?: "web" | "desktop", list?: boolean }} Scene */
+/** @type {Array<{ name: string, dir: string } & Scene>} */
 const SCENES = [];
 for (const [suffix, locale] of /** @type {const} */ ([["zh", "zh-CN"], ["en", "en"]])) {
   SCENES.push(
-    { name: `hover-${suffix}`, scene: "hover", locale, scheme: "light" },
-    { name: `hover-dark-${suffix}`, scene: "hover", locale, scheme: "dark" },
-    { name: `overview-${suffix}`, scene: "overview", locale, scheme: "light", tab: "conversations" },
-    { name: `save-${suffix}`, scene: "save", locale, scheme: "light" },
-    { name: `favorites-${suffix}`, scene: "overview", locale, scheme: "light", tab: "favorites" },
-    { name: `prs-${suffix}`, scene: "overview", locale, scheme: "light", tab: "refs" },
+    { name: `hover-${suffix}`, dir: out, scene: "hover", locale, scheme: "light" },
+    { name: `hover-dark-${suffix}`, dir: out, scene: "hover", locale, scheme: "dark" },
+    { name: `overview-${suffix}`, dir: out, scene: "overview", locale, scheme: "light", tab: "conversations" },
+    { name: `save-${suffix}`, dir: out, scene: "save", locale, scheme: "light" },
+    { name: `favorites-${suffix}`, dir: out, scene: "overview", locale, scheme: "light", tab: "favorites" },
+    { name: `prs-${suffix}`, dir: out, scene: "overview", locale, scheme: "light", tab: "refs" },
   );
+  for (const surface of /** @type {const} */ (["web", "desktop"]))
+    SCENES.push(
+      { name: `summary-${surface}-${suffix}`, dir: checks, scene: "summary", surface, locale, scheme: "light" },
+      { name: `summary-${surface}-list-${suffix}`, dir: checks, scene: "summary", surface, list: true, locale, scheme: "light" },
+    );
 }
 const DIAGRAMS = ["how-it-works-zh", "how-it-works-en"];
 
@@ -245,9 +255,9 @@ const devtools = new DevTools(url);
 const written = [];
 try {
   await devtools.opened;
-  await mkdir(out, { recursive: true });
   for (const scene of SCENES.filter((item) => wanted(item.name))) {
-    const { name, ...setup } = scene;
+    const { name, dir, ...setup } = scene;
+    await mkdir(dir, { recursive: true });
     const file = path.join(temp, `${name}.html`);
     await writeFile(file, page(setup));
     const tab = await open(devtools, pathToFileURL(file).href, { width: WIDTH, height: 1400, scheme: setup.scheme });
@@ -266,7 +276,7 @@ try {
       }
       const rect = await tab.evaluate("window.__finish()");
       const png = await capture(tab, rect);
-      const target = path.join(out, `${name}.png`);
+      const target = path.join(dir, `${name}.png`);
       await writeFile(target, png);
       const { width, height } = decode(png);
       written.push({ file: target, bytes: png.length, width, height });
@@ -274,6 +284,7 @@ try {
       await tab.close();
     }
   }
+  if (DIAGRAMS.some(wanted)) await mkdir(out, { recursive: true });
   for (const name of DIAGRAMS.filter(wanted)) {
     const source = path.join(out, `${name}.svg`);
     const svg = await readFile(source, "utf8");

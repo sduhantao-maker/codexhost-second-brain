@@ -51,6 +51,14 @@ export interface HoverStrings {
   news: string;
   reason(reason: string): string;
   seen: string;
+  /** The name of "🔔 N" at the top of the sidebar: news whose conversation has no row in sight. */
+  summary(count: number): string;
+  /** Its tooltip, saying why it is there. */
+  summaryTip(count: number): string;
+  /** In its list: opens the conversation a piece of news came from. */
+  openConversation: string;
+  /** In its list: the conversation a piece of news came from, and the turn. */
+  fromConversation(title: string, turn: number): string;
   /** A model wrote this mainline. */
   summarized(time: string): string;
   resummarize: string;
@@ -156,6 +164,10 @@ const zh: HoverStrings = {
   news: "PR 与 Issue 新动态",
   reason: (reason) => REASONS_ZH[reason] ?? "有新动态",
   seen: "知道了",
+  summary: (count) => `${count} 条 PR 与 Issue 新动态`,
+  summaryTip: (count) => `${count} 条 PR 与 Issue 新动态，它们所在的对话在侧栏里看不到（在收起的分组里、滚出了列表或没有列出）`,
+  openConversation: "打开对话",
+  fromConversation: (title, turn) => (turn > 0 ? `来自对话「${title}」第 ${turn} 轮` : `来自对话「${title}」`),
   summarized: (time) => `模型凝练 · ${time}`,
   resummarize: "↻ 重新凝练",
   summarizeNow: "↻ 立即凝练",
@@ -216,6 +228,10 @@ const en: HoverStrings = {
   news: "PR and issue news",
   reason: (reason) => REASONS_EN[reason] ?? "New activity",
   seen: "Got it",
+  summary: (count) => `${count} new on your PRs and issues`,
+  summaryTip: (count) => `${count} new on your PRs and issues, from conversations the sidebar does not show (in a collapsed group, scrolled away, or not listed)`,
+  openConversation: "Open conversation",
+  fromConversation: (title, turn) => (turn > 0 ? `From "${title}", turn ${turn}` : `From "${title}"`),
   summarized: (time) => `Summarized ${time}`,
   resummarize: "↻ Summarize again",
   summarizeNow: "↻ Summarize now",

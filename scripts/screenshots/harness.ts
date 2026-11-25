@@ -5,11 +5,17 @@
  * the overview page (`mount`), and on the "web" surface the sidebar hover card (`startHover`) and
  * the ★ Save button (`startFavorites`), driven by the real controller and web adapter.
  *
+ * The "summary" scene is not for the README: it shows "🔔 N" (news whose conversation has no row in
+ * sight) at the top of a mock codexhost Web sidebar and of a mock Codex Desktop sidebar, through the
+ * real Web and Desktop adapters, so that one can check by eye that it covers none of the host's text
+ * or buttons.
+ *
  * scripts/screenshots/run.mjs bundles this file, opens it in headless Chrome with a scene in
  * `window.__SCENE__`, and calls `__finish()` once the scene is ready to learn what to capture.
  */
 import type { Locale } from "../../src/core/model.js";
-import type { PageApi, StorageApi, WebApi } from "../../src/host/types.js";
+import { createDesktopAdapter } from "../../src/desktop/adapter.js";
+import type { DesktopApi, DesktopSidebarRow, PageApi, StorageApi, WebApi } from "../../src/host/types.js";
 import { mount } from "../../src/page/index.js";
 import { startController } from "../../src/ui/controller.js";
 import { startFavorites } from "../../src/ui/favorites/index.js";
@@ -19,11 +25,14 @@ import { demoBackend } from "./backend.js";
 import { demo, IDS, type Demo } from "./demo.js";
 
 export interface Scene {
-  scene: "hover" | "save" | "overview";
+  scene: "hover" | "save" | "overview" | "summary";
   locale: Locale;
   scheme: "light" | "dark";
   /** The overview's tab. */
   tab?: "conversations" | "favorites" | "refs";
+  /** The summary scene: whose sidebar is mocked, and whether the summary's list is open. */
+  surface?: "web" | "desktop";
+  list?: boolean;
   /** The time the demo data is relative to. */
   now: number;
   /** The extension's icon, as a data URL, for the overview page's tab. */
@@ -61,14 +70,19 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string,
   return node;
 }
 
-/** A small line icon of the mock host: a speech bubble, a folder, a plus, an arrow, and codexhost Web's "add to chat". */
-function glyph(name: "chat" | "folder" | "plus" | "send" | "addToChat", className: string): SVGSVGElement {
+/** A small line icon of the mock host: a speech bubble, a folder, a plus, an arrow, codexhost Web's "add to chat", and a few sidebar tools. */
+function glyph(name: "chat" | "folder" | "plus" | "send" | "addToChat" | "search" | "sidebar" | "filter" | "chevronDown" | "chevronRight", className: string): SVGSVGElement {
   const paths = {
     chat: ["M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7.5L4.5 14v-2.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z"],
     folder: ["M2 4.5a1 1 0 0 1 1-1h3.2l1.4 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"],
     plus: ["M8 3.5v9", "M3.5 8h9"],
     send: ["M8 13V3.5", "M4 7.5 8 3.5l4 4"],
     addToChat: ["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", "M12 7v6", "M9 10h6"],
+    search: ["M7 11.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9z", "M10.3 10.3 14 14"],
+    sidebar: ["M2.5 3.5h11v9h-11z", "M6 3.5v9"],
+    filter: ["M2.5 4h11", "M4.5 8h7", "M6.5 12h3"],
+    chevronDown: ["M4.5 6.5 8 10l3.5-3.5"],
+    chevronRight: ["M6.5 4.5 10 8l-3.5 3.5"],
   }[name];
   const big = name === "addToChat";
   const svg = document.createElementNS(SVG, "svg");
@@ -352,11 +366,134 @@ async function overviewScene(): Promise<void> {
   };
 }
 
+// ---------------------------------------------------------------------------------------------
+// The summary of news whose conversation has no row in sight
+
+/** A conversation row of the mock sidebars: an icon and the title, `attrs` saying whose it is. */
+function mockRow(threadId: string, attrs: Record<string, string>, selected: boolean): HTMLElement {
+  return el("div", { class: "row", ...attrs, ...(selected ? { "aria-current": "page", "aria-selected": "true" } : {}) }, glyph("chat", "row-icon"), el("span", { class: "row-title" }, data.info[threadId]?.title ?? threadId));
+}
+
+/** A small icon button of the mock host. */
+function tool(name: "search" | "sidebar" | "filter" | "plus" | "folder", label: string): HTMLElement {
+  return el("button", { class: "tool", type: "button", "aria-label": label, title: label }, glyph(name, "tool-icon"));
+}
+
+/**
+ * codexhost Web's sidebar, as far as the summary is concerned: its name and two small buttons on
+ * top, "New chat", the Recent list (where the conversation with PR #42 is), and the workspaces,
+ * collapsed (their conversations, the one with PR #45 among them, are not listed).
+ */
+function webSidebar(selected: string): HTMLElement {
+  const h = data.host;
+  const recent = [IDS.login, IDS.coupon, IDS.ipad].map((id) => mockRow(id, { role: "treeitem", "data-row-key": `recent:${id}` }, id === selected));
+  const workspace = (name: string) =>
+    el("div", { class: "ws-head folded", role: "treeitem", "aria-expanded": "false", "data-row-key": `workspace:${name}` }, glyph("chevronRight", "ws-chevron"), glyph("folder", "ws-icon"), el("span", {}, name));
+  return el(
+    "aside",
+    { class: "sidebar mock-side", "data-cx-region": "sidebar" },
+    el("div", { class: "side-head" }, el("span", { class: "brand" }, "codexhost"), el("span", { class: "tools" }, tool("search", h.search), tool("sidebar", h.hideSidebar))),
+    el("div", { class: "new-chat" }, glyph("plus", "new-icon"), el("span", {}, h.newChat)),
+    el("div", { class: "side-section" }, h.recent),
+    ...recent,
+    el("div", { class: "side-section" }, h.workspaces),
+    workspace("shop-web"),
+    workspace("docs-site"),
+  );
+}
+
+/**
+ * Codex Desktop's sidebar: the window's close, minimize and zoom buttons and a button to hide the
+ * sidebar on top, "New chat" and "Search", then the list of conversations by project, which
+ * scrolls. The project holding the conversation with PR #45 is collapsed: its row is there but
+ * hidden (display: none), as Desktop leaves it.
+ */
+function desktopSidebar(selected: string): { element: HTMLElement; rows: Array<{ element: HTMLElement; threadId: string }> } {
+  const h = data.host;
+  const rows: Array<{ element: HTMLElement; threadId: string }> = [];
+  const row = (id: string) => {
+    const element = mockRow(id, { "data-app-action-sidebar-thread-row": "", ...(id === selected ? { "data-app-action-sidebar-thread-active": "true" } : {}) }, id === selected);
+    rows.push({ element, threadId: id });
+    return element;
+  };
+  const project = (name: string, ids: readonly string[], open: boolean) =>
+    el(
+      "div",
+      { class: "d-project" },
+      el("div", { class: "ws-head", role: "button", "aria-expanded": String(open) }, glyph(open ? "chevronDown" : "chevronRight", "ws-chevron"), glyph("folder", "ws-icon"), el("span", {}, name)),
+      el("div", { class: "d-rows", ...(open ? {} : { style: "display: none" }) }, ...ids.map(row)),
+    );
+  const lights = el("span", { class: "lights", "aria-hidden": "true" }, ...["#ff5f57", "#febc2e", "#28c840"].map((color) => el("button", { class: "light", type: "button", tabindex: "-1", style: `background: ${color}` })));
+  const element = el(
+    "aside",
+    { class: "sidebar mock-side desktop-side" },
+    el("div", { class: "titlebar" }, lights, tool("sidebar", h.hideSidebar)),
+    el("div", { class: "nav-item", role: "button" }, glyph("plus", "new-icon"), el("span", {}, h.newChat)),
+    el("div", { class: "nav-item", role: "button" }, glyph("search", "new-icon"), el("span", {}, h.search)),
+    el(
+      "div",
+      { class: "d-scroll", "data-app-action-sidebar-scroll": "" },
+      el("div", { class: "side-section with-tools" }, el("span", {}, h.threads), el("span", { class: "tools" }, tool("filter", h.filter), tool("folder", h.newProject))),
+      project("shop-web", [IDS.login, IDS.ipad, IDS.coupon, IDS.search, IDS.perf, IDS.lazyload, IDS.export], true),
+      project("shop-api", [IDS.payment], false),
+      project("docs-site", [IDS.docs], true),
+    ),
+  );
+  return { element, rows };
+}
+
+function desktopApi(rows: ReadonlyArray<{ element: HTMLElement; threadId: string }>): DesktopApi {
+  const reported: DesktopSidebarRow[] = rows.map(({ element, threadId }) => ({ element, hostId: "local", isLocal: true, threadId, draftId: null, isConnected: () => element.isConnected }));
+  return {
+    id: "second-brain",
+    apiVersion: 1,
+    signal: new AbortController().signal,
+    sidebar: {
+      observeRows: (callback) => {
+        callback(reported);
+        return () => undefined;
+      },
+    },
+    threads: { watchTree: () => () => undefined },
+    navigate: { openThread: async () => undefined },
+    dom: { mount: (node, parent) => void parent.append(node), mark: () => undefined, unmark: () => undefined },
+    storage,
+    backend: { invoke },
+    track: () => undefined,
+  };
+}
+
+async function summaryScene(): Promise<void> {
+  const root = canvas();
+  const desktop = scene.surface === "desktop";
+  const selected = data.open.threadId;
+  const mock = desktop ? desktopSidebar(selected) : { element: webSidebar(selected), rows: [] };
+  const frame = el("div", { class: `window summary-window${desktop ? " desktop" : ""}` }, mock.element, conversation(data.open.title));
+  root.append(frame);
+  const adapter = desktop ? createDesktopAdapter(desktopApi(mock.rows), document) : createWebAdapter(webApi(), document);
+  const controller = startController(adapter);
+  startHover(adapter, controller);
+  await controller.refresh();
+  const summary = () => hoverRoot()?.querySelector<HTMLButtonElement>(".summary:not([hidden])") ?? null;
+  await until(() => Boolean(summary()) && Boolean(hoverRoot()?.querySelector(".news-marker:not([hidden])")), "the summary and the bell");
+  window.__finish = async () => {
+    if (scene.list) {
+      summary()!.click();
+      await until(() => Boolean(hoverRoot()?.querySelector(".news-list:not([hidden]) .news-item")), "the list of news");
+      // As after a click: nothing drawn as focused.
+      (hoverRoot()?.activeElement as HTMLElement | null)?.blur();
+    }
+    await nextFrame();
+    return rectOf(root);
+  };
+}
+
 async function start(): Promise<void> {
   document.documentElement.lang = scene.locale;
   document.documentElement.dataset.scheme = scene.scheme;
   if (scene.scene === "hover") await hoverScene();
   else if (scene.scene === "save") await saveScene();
+  else if (scene.scene === "summary") await summaryScene();
   else await overviewScene();
   await document.fonts.ready;
   window.__state = "ready";

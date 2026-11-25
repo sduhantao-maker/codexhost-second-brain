@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activate } from "../src/backend/index.js";
 import { ExternalApi, HttpError, normalizeStatus } from "../src/backend/external-api.js";
 import { ThreadInfoService } from "../src/backend/threads.js";
@@ -156,7 +156,7 @@ describe("local API", () => {
 });
 
 describe("backend refs", () => {
-  it("serves news, per-window refs and search, and clears news when the source window opens", async () => {
+  it("serves news, per-window refs and search, and keeps the news when the source window opens", async () => {
     const dataDir = path.join(root, "host-extension-data", "second-brain");
     const extensionDir = path.join(root, "extension");
     await mkdir(path.join(extensionDir, "bin"), { recursive: true });
@@ -186,11 +186,171 @@ describe("backend refs", () => {
       expect(((await call("refs.forThread", { threadId: "src" })) as unknown[]).length).toBe(1);
       const list = (await call("refs.list")) as { status: { refs: number; github: { enabled: boolean } } };
       expect(list.status).toMatchObject({ refs: 1, github: { enabled: true } });
+      // Opening the conversation the PR came from is not seeing its news: only acting on the bell is.
       const after = (await call("snapshot", { focus: { threadId: "src", surface: "web" } })) as SnapshotResultV2;
-      expect(after.alerts).toEqual([]);
+      expect(after.alerts?.map(({ key }) => key)).toEqual(["o/r#1081"]);
     } finally {
       await dispose();
     }
+  });
+});
+
+describe("the bell on news about PRs and issues", () => {
+  /** A backend whose index has unseen news on three PRs: #1 and #3 came up first in "src", #2 in "other" (and #3 there later). */
+  async function withNews(options: Parameters<typeof activate>[1] = {}) {
+    const dataDir = path.join(root, "host-extension-data", "second-brain");
+    const extensionDir = path.join(root, "extension");
+    await mkdir(path.join(extensionDir, "bin"), { recursive: true });
+    await writeFile(path.join(extensionDir, "bin", "mainline.mjs"), "// cli\n");
+    const { updateIndex, refsPaths } = await import("../src/node/refs-store.js");
+    const { addMention, applyActivity, extractLinks } = await import("../src/core/refs.js");
+    await updateIndex(refsPaths(dataDir), (index) => {
+      const mention = (url: string, threadId: string, turn: number, at: number) => addMention(index, extractLinks(url)[0]!, { threadId, turn, at, role: "agent" });
+      mention("https://github.com/o/r/pull/1", "src", 2, 1);
+      mention("https://github.com/o/r/pull/2", "other", 3, 2);
+      mention("https://github.com/o/r/pull/3", "src", 4, 3);
+      mention("https://github.com/o/r/pull/3", "other", 5, 4);
+      for (const [key, at] of [["o/r#1", 10], ["o/r#2", 11], ["o/r#3", 12]] as const) {
+        applyActivity(index, key, { at, reason: "comment" }, true);
+        Object.assign(index.refs[key]!, { state: "open", title: key, checkedAt: Date.now() });
+      }
+    });
+    const handlers = new Map<string, (params: unknown) => unknown>();
+    const dispose = await activate(
+      { extensionId: "second-brain", extensionDir, dataDir, readSettings: async () => ({}), writeSettings: async (values) => values, handle: (method, handler) => handlers.set(method, handler) },
+      { runGh: noGh, ...options },
+    );
+    const call = async (method: string, params?: unknown) => handlers.get(method)!(params);
+    const news = async () => ((await call("snapshot", {})) as SnapshotResultV2).alerts?.map(({ key }) => key).sort();
+    return { call, news, dispose };
+  }
+
+  it("stays when windows switch conversations, also with two windows on different conversations taking turns", async () => {
+    const { call, news, dispose } = await withNews();
+    try {
+      // Desktop shows these conversations: their titles come from its tree.
+      await call("reportTree", { nodes: { src: { title: "Cart fix", status: "idle" }, other: { title: "Checkout", status: "idle" } }, parents: {} });
+      expect(await news()).toEqual(["o/r#1", "o/r#2", "o/r#3"]);
+      // The codexhost window and a browser tab, both Web, each on its own conversation, poll in turns.
+      for (let round = 0; round < 3; round += 1) {
+        await call("snapshot", { client: "window-aaaa-1111", focus: { threadId: "src", surface: "web" } });
+        await call("snapshot", { client: "browser-tab-2222", focus: { threadId: "other", surface: "web" } });
+      }
+      // A surface that sends no id (an older one) switching back and forth does not clear them either.
+      await call("snapshot", { focus: { threadId: "src", surface: "desktop" } });
+      await call("snapshot", { focus: { threadId: "other", surface: "desktop" } });
+      expect(await news()).toEqual(["o/r#1", "o/r#2", "o/r#3"]);
+      // Both windows count as open, each with its own conversation (an id that is no id counts as none).
+      const snapshot = (await call("snapshot", { client: "x" })) as SnapshotResultV2;
+      expect(Object.keys(snapshot.info ?? {}).sort()).toEqual(["other", "src"]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("is sent for every piece of unseen news, also past ten, so that none loses its bell unseen", async () => {
+    const { call, news, dispose } = await withNews();
+    try {
+      const { updateIndex, refsPaths } = await import("../src/node/refs-store.js");
+      const { addMention, applyActivity, extractLinks } = await import("../src/core/refs.js");
+      await updateIndex(refsPaths(path.join(root, "host-extension-data", "second-brain")), (index) => {
+        for (let number = 10; number < 22; number += 1) {
+          addMention(index, extractLinks(`https://github.com/o/r/issues/${number}`)[0]!, { threadId: `t${number}`, turn: 1, at: number, role: "user" });
+          applyActivity(index, `o/r#${number}`, { at: 100 + number, reason: "comment" }, true);
+        }
+      });
+      expect(await news()).toHaveLength(15);
+      await call("refs.seenForThread", { threadId: "t10" });
+      expect(await news()).toHaveLength(14);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("goes when the user opens the conversation from its row: the news of every PR and issue it started", async () => {
+    const { call, news, dispose } = await withNews();
+    try {
+      // #3 came up in "other" too, but it started in "src".
+      expect(await call("refs.seenForThread", { threadId: "src" })).toEqual({ ok: true, keys: ["o/r#1", "o/r#3"] });
+      expect(await news()).toEqual(["o/r#2"]);
+      expect(await call("refs.seenForThread", { threadId: "src" })).toEqual({ ok: true, keys: [] });
+      await expect(call("refs.seenForThread", { threadId: "__proto__" })).rejects.toThrow("[INVALID_ARGUMENT]");
+      await expect(call("refs.seenForThread", {})).rejects.toThrow("[INVALID_ARGUMENT]");
+      // "Got it" on one piece of news.
+      await call("refs.seen", { key: "o/r#2" });
+      expect(await news()).toEqual([]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  // The clock is moved by hand; timers go back to real ones, and the backend stops, even when the test fails.
+  const stops: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    vi.useRealTimers();
+    for (const stop of stops.splice(0)) await stop();
+  });
+
+  it("is looked for on GitHub every minute while the extension is in use, and every 10 minutes once it is not", { timeout: 60_000 }, async () => {
+    // Real waits, for the backend's own reads and writes (taken before the clock is faked); the clock it sees is moved by hand.
+    const realTimeout = globalThis.setTimeout;
+    const pause = (ms: number) => new Promise<void>((resolve) => realTimeout(resolve, ms));
+    const start = Date.parse("2026-11-25T08:00:00Z");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"], now: start });
+    const delays: Array<[at: number, delay: number]> = [];
+    const asked: number[] = [];
+    const runGh = async (args: string[]) => {
+      if (args.includes("notifications")) asked.push(Date.now());
+      return args.includes("notifications") ? "[]" : JSON.stringify({ title: "x", state: "open", merged: false });
+    };
+    const { call, dispose } = await withNews({ runGh, githubScheduled: (delay) => delays.push([Date.now(), delay]) });
+    stops.push(dispose);
+    const poll = () => call("snapshot", { client: "window-aaaa-1111", focus: { threadId: "src", surface: "web" } });
+    /**
+     * Moves the clock to the next GitHub round (20 seconds after the start, then as the last round
+     * set it) and waits until that round has set the next one. A round that waits for a lock the
+     * scanner holds waits on a timer too: the clock is nudged now and then meanwhile. `before`
+     * runs a second before the round, as a window that polls every few seconds would.
+     */
+    const nextRound = async (before?: () => Promise<unknown>) => {
+      const count = delays.length;
+      const [at, delay] = delays.at(-1) ?? [start, 20_000];
+      if (before) {
+        if (Date.now() < at + delay - 1000) await vi.advanceTimersByTimeAsync(at + delay - 1000 - Date.now());
+        await before();
+      }
+      if (Date.now() < at + delay) await vi.advanceTimersByTimeAsync(at + delay - Date.now());
+      for (let tries = 0; delays.length === count; tries += 1) {
+        if (tries > 2000) throw new Error("the GitHub round did not finish");
+        await pause(5);
+        if (tries % 20 === 19) await vi.advanceTimersByTimeAsync(100);
+      }
+    };
+    // The first round comes 20 seconds after the start; the extension was just used (it started).
+    await nextRound();
+    expect(asked).toHaveLength(1);
+    expect(delays.map(([, delay]) => delay)).toEqual([60_000]);
+    // In use: a window asks for its snapshot. The next round comes a minute later, and the one after too.
+    const usedAt = Date.now();
+    await poll();
+    await nextRound();
+    await nextRound();
+    expect(asked).toHaveLength(3);
+    expect(asked[1]! - asked[0]!).toBeGreaterThanOrEqual(60_000);
+    expect(asked[1]! - asked[0]!).toBeLessThan(62_000);
+    expect(delays.map(([, delay]) => delay)).toEqual([60_000, 60_000, 60_000]);
+    // Nothing asks any more (every window closed or hidden): a minute at a time until 10 minutes have passed, then 10 minutes.
+    while (!delays.some(([, delay]) => delay === 10 * 60_000)) await nextRound();
+    const idle = delays.findIndex(([, delay]) => delay === 10 * 60_000);
+    expect(delays.slice(0, idle).every(([, delay]) => delay === 60_000)).toBe(true);
+    expect(delays[idle]![0] - usedAt).toBeGreaterThanOrEqual(10 * 60_000);
+    expect(delays[idle - 1]![0] - usedAt).toBeLessThan(10 * 60_000);
+    // A window opens again and polls: after the round already set, a minute at a time again.
+    await nextRound(poll);
+    await nextRound(poll);
+    expect(delays.slice(idle + 1).map(([, delay]) => delay)).toEqual([60_000, 60_000]);
+    expect(asked.at(-1)! - asked.at(-2)!).toBeGreaterThanOrEqual(60_000);
+    expect(asked.at(-1)! - asked.at(-2)!).toBeLessThan(62_000);
   });
 });
 

@@ -9,17 +9,39 @@
  * controller reports a new snapshot version. From the card the user can open a child conversation
  * (with files uploaded along), ask for a summary and mark GitHub news seen; nothing here touches
  * the host's nodes: the card, the badge and the bells are overlays in a shadow root under body.
+ *
+ * A bell goes away only when the user acts on it, judged in the window where that happens: a click
+ * (or Enter) on one of the conversation's rows while its bell or its card's news shows, "Got it" in
+ * the card, "Open conversation" or "Got it" in the summary's list, or Go in the overview's PR tab.
+ * Opening or switching conversations any other way leaves it. News whose conversation has no row
+ * in sight here (in a collapsed group, scrolled away, not listed) is counted in one button at the
+ * top of the sidebar, "🔔 N", which opens a list of it.
  */
 import { ATTACH_MAX_FILE_BYTES, ATTACH_MAX_FILES, ATTACH_MAX_TOTAL_BYTES, attachmentKind, formatSize } from "../../core/attachments.js";
 import type { ConversationView } from "../../core/conversation-view.js";
 import { cleanText, isErrorCode } from "../../core/model.js";
+import type { RefView } from "../../core/refs.js";
 import { errorCodeOf, type ConversationParams } from "../../core/rpc.js";
 import type { ControllerHandle, LiveData, SurfaceAdapter } from "../controller.js";
 import { adoptStyles, builder, type Builder } from "../dom.js";
 import { errorDetail, strings } from "../i18n.js";
 import { detectScheme } from "../theme.js";
 import { cardNodes, COMPOSE_IDLE, type CardActions, type CardContent, type ComposeState, type Expandable, type PendingFile, type SpawnTarget } from "./card.js";
-import { badgeSpot, boxOf, CARD_WIDTH, cardSpot, hostPopup, keepInside, newsBadgeSpot, type Box } from "./layout.js";
+import {
+  badgeSpot,
+  boxOf,
+  CARD_WIDTH,
+  cardSpot,
+  hostContent,
+  hostPopup,
+  keepInside,
+  newsBadgeSpot,
+  onRowControl,
+  SUMMARY_BAND,
+  SUMMARY_SIZE,
+  summarySpot,
+  type Box,
+} from "./layout.js";
 import { hoverLocale, hoverStrings, type HoverStrings } from "./strings.js";
 import { HOVER_CSS } from "./styles.js";
 import { uploadFile } from "./upload.js";
@@ -39,6 +61,26 @@ const ERROR_LENGTH = 80;
 export const CONFIRM_MS = 3000;
 /** After the window has the focus back from the file picker, this long for its answer. */
 const PICKER_GRACE_MS = 1000;
+/** A click counts for the row pressed this long before it at most. */
+const PRESS_MS = 5000;
+/** Clicking a row and the Enter that led to it count once. */
+const ACTIVATED_MS = 1500;
+/** Opening a conversation from the summary's list waits this long at most for its news to be marked seen. */
+const SEEN_WAIT_MS = 1000;
+/** The list the summary opens. */
+const LIST_ID = "cxm-news-list";
+const LIST_WIDTH = 300;
+const LIST_GAP = 6;
+/**
+ * Where macOS draws a window's close, minimize and zoom buttons over Codex Desktop's page, in CSS
+ * pixels: no element of the page shows them, so the summary is kept off this corner.
+ */
+const WINDOW_BUTTONS: Box = { left: 0, top: 0, right: 84, bottom: 44, width: 84, height: 44 };
+/** The extension's own overlays: the capsule, this one and the ★ button. */
+const OVERLAYS = "[data-codexhost-mainline], [data-codexhost-mainline-hover], [data-codexhost-mainline-favorites]";
+
+/** A value for an attribute selector in double quotes. */
+const quoted = (value: string) => value.replace(/["\\]/gu, "\\$&");
 
 /** The upload stopped because the card closed. */
 class Stopped extends Error {}
@@ -56,6 +98,16 @@ interface Row {
   threadId: string;
   /** Where the row was when last measured; the host may swap the element for a new one meanwhile. */
   box: Box;
+  /** Its conversation's bell was in sight as the pointer came onto the row (it hides while the row is hovered). */
+  bell: boolean;
+}
+
+/** A row pressed: whose, where, when, and whether its conversation's news showed then. */
+interface Press {
+  threadId: string;
+  box: Box;
+  at: number;
+  showing: boolean;
 }
 
 export function startHover(adapter: SurfaceAdapter, controller: ControllerHandle): () => void {
@@ -164,8 +216,25 @@ class SidebarHover {
   #summaryFailed: { threadId: string; message: string } | null = null;
   /** Conversations with unseen GitHub news about PRs and issues they started, and how many. */
   #news = new Map<string, number>();
+  /** That news, from the latest snapshot. */
+  #alerts: RefView[] = [];
   /** The bell on each such conversation's row in the sidebar. */
   readonly #markers = new Map<string, HTMLElement>();
+  /** The row pressed last, until its click. */
+  #press: Press | null = null;
+  /** The conversation whose news was last marked seen from its row, and when. */
+  #activated: { threadId: string; at: number } | null = null;
+  /** "🔔 N" at the top of the sidebar: news whose conversation has no row in sight here. */
+  readonly #summary: HTMLButtonElement;
+  /** The list the summary opens. */
+  readonly #list: HTMLElement;
+  /** The news the summary counts, newest first. */
+  #unplaced: RefView[] = [];
+  /** What the summary's place was worked out for (sidebar, window and text), and whether it sits over a list that scrolls. */
+  #summaryFor = "";
+  #summaryOverList = false;
+  /** What the list shows now, to skip rebuilding it when nothing changed. */
+  #listShows = "";
   #stopped = false;
 
   constructor(adapter: SurfaceAdapter, controller: ControllerHandle) {
@@ -193,7 +262,13 @@ class SidebarHover {
     this.#badge = h("div", { class: "badge", attrs: { "aria-hidden": "true", hidden: "" } });
     this.#picker = h("input", { class: "picker", attrs: { type: "file", multiple: "", hidden: "", tabindex: "-1", "aria-hidden": "true" } });
     this.#live = h("div", { class: "sr-only", attrs: { role: "status", "aria-live": "polite" } });
-    this.#root = h("div", { class: "root" }, this.#card, this.#badge, this.#picker, this.#live);
+    this.#summary = h("button", {
+      class: "summary",
+      attrs: { type: "button", hidden: "", "aria-haspopup": "dialog", "aria-expanded": "false", "aria-controls": LIST_ID },
+      on: { click: () => this.#toggleList() },
+    });
+    this.#list = h("div", { class: "news-list", attrs: { id: LIST_ID, role: "dialog", hidden: "" } });
+    this.#root = h("div", { class: "root" }, this.#card, this.#badge, this.#summary, this.#list, this.#picker, this.#live);
     shadow.append(this.#root);
 
     this.#actions = {
@@ -292,7 +367,15 @@ class SidebarHover {
       }, 0);
     });
     this.#listen(doc, "keydown", (event) => {
-      if ((event as KeyboardEvent).key === "Escape" && (this.#shown || this.#showTimer)) this.#hide();
+      if ((event as KeyboardEvent).key !== "Escape") return;
+      if (this.#shown || this.#showTimer) this.#hide();
+      if (!this.#list.hidden) this.#closeList(this.#focusIn(this.#list) || this.#focusIn(this.#summary));
+    }, true);
+    // A press anywhere but on the summary or its list closes the list.
+    this.#listen(doc, "pointerdown", (event) => {
+      if (this.#list.hidden) return;
+      const path = event.composedPath();
+      if (!path.includes(this.#list) && !path.includes(this.#summary)) this.#closeList(false);
     }, true);
     // Going to the background hides the card, unless the user is in the middle of a new problem:
     // picking files, fetching one to drop from another app, or sending them.
@@ -365,7 +448,7 @@ class SidebarHover {
     // The host may draw the sidebar late or anew, and move rows without scrolling: look again now and then.
     const rebind = setInterval(() => {
       this.#bindSidebar();
-      this.#placeMarkers();
+      this.#placeMarkers(true);
     }, REBIND_MS);
     this.#cleanup.push(() => clearInterval(rebind));
   }
@@ -392,6 +475,9 @@ class SidebarHover {
     }
     this.#host.remove();
     this.#markers.clear();
+    this.#alerts = [];
+    this.#unplaced = [];
+    this.#press = null;
     this.#cache.clear();
     this.#stale.clear();
     this.#errors.clear();
@@ -426,29 +512,106 @@ class SidebarHover {
     const over = (event: Event) => this.#onOver(event);
     const out = (event: Event) => this.#onOut(event);
     const leave = () => this.#leaveRow();
-    // Clicking a row opens it; the card would only be in the way.
-    const down = () => this.#hide();
+    // Clicking a row opens it; the card would only be in the way. Whether the row's news showed is
+    // noted first: the click that follows counts as seeing it.
+    const down = (event: Event) => {
+      this.#notePress(event);
+      this.#hide();
+    };
+    // In the capture phase, so that the host stopping the event on the row cannot hide it from here.
+    const click = (event: Event) => this.#onRowClick(event as MouseEvent);
+    const key = (event: Event) => this.#onRowKey(event as KeyboardEvent);
     next.addEventListener("pointerover", over);
     next.addEventListener("pointerout", out);
     next.addEventListener("pointerleave", leave);
     next.addEventListener("pointerdown", down, true);
+    next.addEventListener("click", click, true);
+    next.addEventListener("keydown", key, true);
     this.#unbindSidebar = () => {
       next.removeEventListener("pointerover", over);
       next.removeEventListener("pointerout", out);
       next.removeEventListener("pointerleave", leave);
       next.removeEventListener("pointerdown", down, true);
+      next.removeEventListener("click", click, true);
+      next.removeEventListener("keydown", key, true);
     };
+  }
+
+  /** The conversation row under an event target, if any. */
+  #rowAt(target: EventTarget | null): { element: HTMLElement; threadId: string } | null {
+    try {
+      return this.#adapter.rowAt?.(target) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Whether this conversation's bell is on screen in the sidebar now. */
+  #bellInSight(threadId: string): boolean {
+    const marker = this.#markers.get(threadId);
+    return Boolean(marker?.isConnected && !marker.hidden);
+  }
+
+  /**
+   * Whether the user can see that this conversation has news: its bell in the sidebar, or the news
+   * on top of its hover card. The bell hides while its row is hovered, so the row under the pointer
+   * counts when the bell was in sight as the pointer came onto it.
+   */
+  #newsShowing(threadId: string): boolean {
+    if (this.#bellInSight(threadId)) return true;
+    if (this.#row?.threadId === threadId && this.#row.bell) return true;
+    return this.#shown?.threadId === threadId && !this.#card.hidden && this.#card.querySelector('[data-section="news"]') !== null;
+  }
+
+  #notePress(event: Event): void {
+    const hit = this.#rowAt(event.target);
+    this.#press =
+      hit && !onRowControl(event.target, hit.element)
+        ? { threadId: hit.threadId, box: boxOf(hit.element), at: Date.now(), showing: this.#newsShowing(hit.threadId) }
+        : null;
+  }
+
+  /**
+   * A click that opens a conversation from its row while its bell or its card's news showed (as it
+   * was when the row was pressed) marks the news of the PRs and issues it started as seen. Clicks on
+   * the row's own small buttons (pin, archive, a menu) do not open it, and do not count.
+   */
+  #onRowClick(event: MouseEvent): void {
+    const press = this.#press;
+    this.#press = null;
+    const recent = press && Date.now() - press.at < PRESS_MS ? press : null;
+    let hit: { element: HTMLElement | null; threadId: string } | null = this.#rowAt(event.target);
+    // The host drew the row anew between the press and the click: where it was pressed tells.
+    if (!hit && recent && event.clientX >= recent.box.left && event.clientX <= recent.box.right && event.clientY >= recent.box.top && event.clientY <= recent.box.bottom)
+      hit = { element: null, threadId: recent.threadId };
+    if (!hit || (hit.element && onRowControl(event.target, hit.element))) return;
+    const showing = recent?.threadId === hit.threadId ? recent.showing : this.#newsShowing(hit.threadId);
+    if (showing) this.#seenFromRow(hit.threadId);
+  }
+
+  /** Enter on a row opens it too (a row that is a button or link also gets a click, which counts once with it). */
+  #onRowKey(event: KeyboardEvent): void {
+    if (event.key !== "Enter" || event.isComposing || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const hit = this.#rowAt(event.target);
+    if (!hit || onRowControl(event.target, hit.element)) return;
+    if (this.#newsShowing(hit.threadId)) this.#seenFromRow(hit.threadId);
+  }
+
+  /** Marks seen the news of every PR and issue this conversation started, as opening it from its row while the news showed. */
+  #seenFromRow(threadId: string): void {
+    const last = this.#activated;
+    if (last?.threadId === threadId && Date.now() - last.at < ACTIVATED_MS) return;
+    this.#activated = { threadId, at: Date.now() };
+    void Promise.resolve()
+      .then(() => this.#adapter.invoke("refs.seenForThread", { threadId }))
+      .then(() => this.#controller.refresh())
+      .catch(() => undefined);
   }
 
   #onOver(event: Event): void {
     // Touch has no hover; a long press would only leave a card behind.
     if ((event as PointerEvent).pointerType === "touch") return;
-    let hit: Omit<Row, "box"> | null = null;
-    try {
-      hit = this.#adapter.rowAt?.(event.target) ?? null;
-    } catch {
-      hit = null;
-    }
+    const hit = this.#rowAt(event.target);
     if (hit) this.#enterRow(hit);
     else this.#leaveRow();
   }
@@ -461,13 +624,15 @@ class SidebarHover {
     this.#leaveRow();
   }
 
-  #enterRow(found: Omit<Row, "box">): void {
+  #enterRow(found: { element: HTMLElement; threadId: string }): void {
     this.#cancelHide();
     // While the user types a new problem (or one is being opened), the card stays with its conversation.
     if (this.#shown && this.#holding() && found.threadId !== this.#shown.threadId) return;
     const row = this.#row;
     if (row && row.element === found.element && row.threadId === found.threadId) return;
-    const hit: Row = { element: found.element, threadId: found.threadId, box: boxOf(found.element) };
+    // The bell hides once the pointer is on its conversation's row: note whether it was in sight first.
+    const bell = this.#bellInSight(found.threadId) || (row?.threadId === found.threadId && row.bell);
+    const hit: Row = { element: found.element, threadId: found.threadId, box: boxOf(found.element), bell };
     this.#row = hit;
     clearTimeout(this.#prefetchTimer);
     this.#renderBadge();
@@ -718,18 +883,20 @@ class SidebarHover {
     this.#hideTimer = undefined;
   }
 
-  /** Keeps the card and badge on their row while the sidebar scrolls; other scrolling is ignored. */
+  /** Keeps the card, the badge and the bells on their rows while the sidebar scrolls; other scrolling is ignored. */
   #onScroll(event: Event | null): void {
-    const element = this.#shown?.element ?? this.#row?.element ?? (this.#markers.size ? this.#sidebar : null);
+    const element = this.#shown?.element ?? this.#row?.element ?? (this.#news.size ? this.#sidebar : null);
     if (!element || this.#framePending) return;
     const target = event?.target;
-    if (target instanceof Node && target !== this.#doc && !target.contains(element)) return;
+    // What scrolls holds the row, or is a list in the sidebar (codexhost Web's sidebar holds its own).
+    if (target instanceof Node && target !== this.#doc && !target.contains(element) && !(this.#news.size && this.#sidebar?.contains(target))) return;
     this.#framePending = true;
     const run = () => {
       this.#framePending = false;
       if (this.#stopped) return;
       this.#reposition();
-      this.#placeMarkers();
+      // The summary moves only when what scrolled went under it.
+      this.#placeMarkers(this.#summaryOverList);
     };
     if (typeof this.#win.requestAnimationFrame === "function") this.#win.requestAnimationFrame(run);
     else setTimeout(run, 16);
@@ -753,6 +920,7 @@ class SidebarHover {
     clearTimeout(this.#prefetchTimer);
     this.#row = null;
     this.#badge.hidden = true;
+    if (!this.#list.hidden) this.#closeList(false);
   }
 
   // -------------------------------------------------------------------------------------------
@@ -966,7 +1134,7 @@ class SidebarHover {
     const spot = cardSpot(shown.box, sidebar, size, viewport, popup ? boxOf(popup) : null);
     // For diagnosis: whether the card made room for a host preview, and what kind.
     this.#card.toggleAttribute("data-beside", popup !== null);
-    if (popup) this.#card.setAttribute("data-beside", popup.hasAttribute("popover") ? "popover" : "fixed");
+    if (popup) this.#card.setAttribute("data-beside", popup.closest("[popover]") ? "popover" : "fixed");
     this.#card.style.left = `${spot.left}px`;
     this.#card.style.top = `${spot.top}px`;
   }
@@ -980,32 +1148,35 @@ class SidebarHover {
       if (threadId) news.set(threadId, (news.get(threadId) ?? 0) + 1);
     }
     this.#news = news;
+    this.#alerts = data.alerts ?? [];
     this.#placeMarkers();
   }
 
   /**
    * A bell on the sidebar row of each conversation with unseen GitHub news, so a maintainer's
-   * reply points at the conversation it belongs to. The hovered row shows its card instead.
+   * reply points at the conversation it belongs to; the hovered row shows its card instead. News
+   * whose conversation has no row in sight goes to the summary at the top of the sidebar.
+   * `relayout`: the summary's place is worked out again even if the sidebar did not move.
    */
-  #placeMarkers(): void {
+  #placeMarkers(relayout = false): void {
     if (this.#stopped) return;
     for (const [threadId, marker] of this.#markers)
       if (!this.#news.has(threadId)) {
         marker.remove();
         this.#markers.delete(threadId);
       }
-    if (!this.#news.size || !this.#adapter.rowsFor) return;
     const t = this.#strings();
+    const unplaced = new Set<string>();
     for (const [threadId, count] of this.#news) {
       let spot: { x: number; y: number } | null = null;
-      if (this.#row?.threadId !== threadId)
-        for (const row of this.#adapter.rowsFor(threadId)) {
-          // In the empty strip left of the row's icon: the title and the row's buttons stay clear.
-          spot = newsBadgeSpot(row, this.#sidebar);
-          if (spot) break;
-        }
+      for (const row of this.#adapter.rowsFor?.(threadId) ?? []) {
+        // In the empty strip left of the row's icon: the title and the row's buttons stay clear.
+        spot = newsBadgeSpot(row, this.#sidebar);
+        if (spot) break;
+      }
+      if (!spot) unplaced.add(threadId);
       let marker = this.#markers.get(threadId);
-      if (!spot) {
+      if (!spot || this.#row?.threadId === threadId) {
         if (marker) marker.hidden = true;
         continue;
       }
@@ -1024,6 +1195,192 @@ class SidebarHover {
       marker.style.top = `${spot.y}px`;
       marker.hidden = false;
     }
+    this.#unplaced = this.#alerts.filter((ref) => ref.origin && unplaced.has(ref.origin.threadId));
+    this.#placeSummary(relayout);
+  }
+
+  /**
+   * "🔔 N" at the top of the sidebar, N being the news whose conversation has no row in sight here
+   * (in a collapsed group, scrolled away, or not listed): a button that opens the list of it. It
+   * sits where it covers none of the host's text or buttons (see summarySpot).
+   */
+  #placeSummary(relayout: boolean): void {
+    const count = this.#unplaced.length;
+    const sidebar = this.#sidebar?.isConnected ? boxOf(this.#sidebar) : null;
+    if (!count || !sidebar || sidebar.width <= 0 || sidebar.height <= 0) {
+      if (!this.#list.hidden) this.#closeList(this.#focusIn(this.#list) || this.#focusIn(this.#summary));
+      this.#summary.hidden = true;
+      this.#summaryFor = "";
+      this.#summaryOverList = false;
+      return;
+    }
+    const t = this.#strings();
+    const label = t.summary(count);
+    if (this.#summary.getAttribute("data-count") !== String(count) || this.#summary.getAttribute("aria-label") !== label) {
+      this.#summary.replaceChildren(this.#h("span", { class: "summary-bell", text: "🔔", attrs: { "aria-hidden": "true" } }), this.#h("span", { text: String(count) }));
+      this.#summary.setAttribute("data-count", String(count));
+      this.#summary.setAttribute("aria-label", label);
+      this.#summary.title = t.summaryTip(count);
+    }
+    if (this.#summary.hidden) {
+      this.#mount();
+      this.#summary.hidden = false;
+    }
+    const viewport = { width: this.#win.innerWidth, height: this.#win.innerHeight };
+    const where = [sidebar.left, sidebar.top, sidebar.width, sidebar.height, viewport.width, viewport.height, count, t.locale].join(",");
+    if (relayout || where !== this.#summaryFor) {
+      this.#summaryFor = where;
+      const size = { width: this.#summary.offsetWidth || SUMMARY_SIZE.width, height: this.#summary.offsetHeight || SUMMARY_SIZE.height };
+      // The top of the sidebar, and above it up to the window's top edge.
+      const bottom = Math.min(sidebar.top + SUMMARY_BAND, sidebar.bottom, viewport.height);
+      const area: Box = { left: sidebar.left, right: sidebar.right, top: 0, bottom, width: sidebar.width, height: Math.max(0, bottom) };
+      const content = hostContent(
+        this.#doc,
+        area,
+        (element) => element === this.#host || element.matches(OVERLAYS),
+        (element) => this.#rowAt(element)?.element === element,
+      );
+      const spot = summarySpot(sidebar, size, viewport, content, this.#adapter.surface === "desktop" ? [WINDOW_BUTTONS] : []);
+      this.#summaryOverList = spot.over;
+      this.#summary.style.left = `${spot.left}px`;
+      this.#summary.style.top = `${spot.top}px`;
+    }
+    if (!this.#list.hidden) {
+      this.#renderList();
+      this.#placeList();
+    }
+  }
+
+  /** Whether the focus is on `element` or in it, within this overlay. */
+  #focusIn(element: Element): boolean {
+    const active = this.#host.shadowRoot?.activeElement;
+    return Boolean(active && (active === element || element.contains(active)));
+  }
+
+  #toggleList(): void {
+    if (this.#list.hidden) this.#openList();
+    else this.#closeList(true);
+  }
+
+  #openList(): void {
+    if (!this.#unplaced.length || this.#summary.hidden) return;
+    this.#listShows = "";
+    this.#renderList();
+    this.#list.hidden = false;
+    this.#summary.setAttribute("aria-expanded", "true");
+    this.#placeList();
+    this.#list.querySelector<HTMLButtonElement>("button")?.focus();
+  }
+
+  /** Closes the list; `focusSummary`: the focus goes back to the summary (it was in the list). */
+  #closeList(focusSummary: boolean): void {
+    this.#list.hidden = true;
+    this.#list.replaceChildren();
+    this.#listShows = "";
+    this.#summary.setAttribute("aria-expanded", "false");
+    if (focusSummary && !this.#summary.hidden) this.#summary.focus();
+  }
+
+  /** Under the summary, or over it where there is no room below; inside the window either way. */
+  #placeList(): void {
+    const summary = boxOf(this.#summary);
+    const viewport = { width: this.#win.innerWidth, height: this.#win.innerHeight };
+    const width = this.#list.offsetWidth || LIST_WIDTH;
+    const height = this.#list.offsetHeight || 0;
+    const left = Math.max(8, Math.min(summary.left, viewport.width - 8 - width));
+    const below = summary.bottom + LIST_GAP;
+    const above = summary.top - LIST_GAP - height;
+    const top = below + height <= viewport.height - 8 || above < 8 ? keepInside(below, height, viewport) : above;
+    this.#list.style.left = `${Math.round(left)}px`;
+    this.#list.style.top = `${Math.round(top)}px`;
+  }
+
+  /**
+   * The news the summary counts, newest first: repository and number, title, what happened and
+   * when, which conversation it came from; "Open conversation" and "Got it" on each.
+   */
+  #renderList(): void {
+    const t = this.#strings();
+    const now = Date.now();
+    const shows = JSON.stringify([t.locale, Math.floor(now / 60_000), this.#unplaced.map((ref) => [ref.key, ref.title, ref.activity, ref.origin])]);
+    if (shows === this.#listShows) return;
+    this.#listShows = shows;
+    // The focus stays on the same button, or moves to the item that takes the place of the one gone.
+    const active = this.#host.shadowRoot?.activeElement;
+    const focused = active && this.#list.contains(active) ? active.getAttribute("data-key") : null;
+    const index = focused ? this.#unplacedIndex(focused) : -1;
+    const h = this.#h;
+    this.#list.setAttribute("aria-label", t.news);
+    this.#list.replaceChildren(
+      h("div", { class: "section-title" }, h("span", { text: t.news })),
+      h("ul", { class: "news-items" }, ...this.#unplaced.map((ref) => this.#listItem(ref, t, now))),
+    );
+    if (!focused) return;
+    const kind = focused.split(":")[0];
+    const again =
+      this.#list.querySelector<HTMLElement>(`[data-key="${quoted(focused)}"]`) ??
+      [...this.#list.querySelectorAll<HTMLElement>(`[data-key^="${kind}:"]`)][Math.min(Math.max(index, 0), this.#unplaced.length - 1)] ??
+      this.#list.querySelector<HTMLElement>("button");
+    if (again) again.focus();
+    else this.#summary.focus();
+  }
+
+  /** Where a button's piece of news was in the list last drawn. */
+  #unplacedIndex(key: string): number {
+    const items = [...this.#list.querySelectorAll(".news-item")];
+    return items.findIndex((item) => item.querySelector(`[data-key="${quoted(key)}"]`) !== null);
+  }
+
+  #listItem(ref: RefView, t: HoverStrings, now: number): HTMLElement {
+    const h = this.#h;
+    const origin = ref.origin;
+    const conversation = origin ? (origin.title ?? `#${origin.threadId.slice(0, 8)}`) : "";
+    return h(
+      "li",
+      { class: "news-item", attrs: { "data-ref": ref.key } },
+      h(
+        "div",
+        { class: "news-item-head" },
+        h("span", { class: "ref-number", text: `${ref.repo}#${ref.number}` }),
+        ref.title ? h("span", { class: "ref-title", text: ref.title, title: ref.title }) : null,
+      ),
+      ref.activity ? h("div", { class: "news-item-meta", text: `${t.reason(ref.activity.reason)} · ${t.time(ref.activity.at, now)}`, title: t.date(ref.activity.at) }) : null,
+      origin ? h("div", { class: "news-item-meta", text: t.fromConversation(conversation, origin.turn) }) : null,
+      h(
+        "div",
+        { class: "news-item-actions" },
+        origin
+          ? h("button", { class: "btn small", text: t.openConversation, attrs: { type: "button", "data-key": `open:${ref.key}` }, on: { click: () => this.#openFromList(ref) } })
+          : null,
+        h("button", { class: "btn small", text: t.seen, attrs: { type: "button", "data-key": `seen:${ref.key}` }, on: { click: () => this.#seenFromList(ref) } }),
+      ),
+    );
+  }
+
+  /** Opens the conversation a piece of news came from, once its news is marked seen (opening may reload the page). */
+  #openFromList(ref: RefView): void {
+    const threadId = ref.origin?.threadId;
+    if (!threadId) return;
+    this.#closeList(false);
+    const seen = Promise.resolve()
+      .then(() => this.#adapter.invoke("refs.seen", { key: ref.key }))
+      .catch(() => undefined);
+    void Promise.race([seen, new Promise((resolve) => setTimeout(resolve, SEEN_WAIT_MS))]).then(() => {
+      if (this.#stopped) return;
+      try {
+        this.#adapter.openThread(threadId);
+      } catch (error) {
+        console.warn("[mainline] could not open the conversation", error);
+      }
+      void this.#controller.refresh();
+    });
+  }
+
+  #seenFromList(ref: RefView): void {
+    void Promise.resolve()
+      .then(() => this.#adapter.invoke("refs.seen", { key: ref.key }))
+      .then(() => this.#controller.refresh())
+      .catch(() => undefined);
   }
 
   /** "◆ reached/total" beside the hovered row's own buttons, for conversations with milestones. */

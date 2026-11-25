@@ -5,7 +5,7 @@
     "en": "Second Brain",
     "zh-CN": "第二大脑"
   },
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": {
     "en": "Your attention is limited; get it back fast. Second Brain remembers what each conversation is doing, how far it got, and which replies are worth keeping. Rest the pointer on a conversation in the sidebar to see its mainline, milestones and tasks, or show them in the conversation header.",
     "zh-CN": "有限的注意力，迅速收回。记住每个对话在做什么、做到哪一步、哪段回复值得留下。鼠标停在侧栏的对话上，就能看到它的主线、里程碑和支线任务；也可以显示在对话标题栏。"
@@ -84,8 +84,8 @@
         "zh-CN": "我经手的 PR 或 issue 在 GitHub 上有人评审、合并或评论时提醒我"
       },
       "description": {
-        "en": "Uses your gh login to read GitHub notifications every few minutes. Comments and reviews by bots, CI results and your own actions do not ring. Read only: notifications are never marked as read.",
-        "zh-CN": "用你已登录的 gh 每几分钟读一次 GitHub 通知。机器人的评论和评审、CI 结果以及你自己的操作不提醒。只读，不会把通知标为已读。"
+        "en": "Uses your gh login to read GitHub notifications: every minute while a Codex Desktop or codexhost window is open, every 10 minutes once they have been closed or hidden for 10 minutes. Comments and reviews by bots, CI results and your own actions do not ring. Read only: notifications are never marked as read.",
+        "zh-CN": "用你已登录的 gh 读 GitHub 通知：有 Codex Desktop 或 codexhost 的窗口开着时每分钟一次，窗口都关掉或隐藏 10 分钟后改为每 10 分钟一次。机器人的评论和评审、CI 结果以及你自己的操作不提醒。只读，不会把通知标为已读。"
       },
       "default": true
     },

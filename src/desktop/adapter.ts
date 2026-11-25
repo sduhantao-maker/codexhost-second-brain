@@ -305,6 +305,11 @@ export function createDesktopAdapter(api: DesktopApi, doc: Document = document):
               const icon = row ? leadingIcon(row) : null;
               return { at: [marker.style.left, marker.style.top], row: box(row), icon: icon ? [Math.round(icon.left), Math.round(icon.top), Math.round(icon.width)] : null };
             }),
+            // "🔔 N": news whose conversation has no row in sight, and where it sits.
+            summary: (() => {
+              const summary = doc.querySelector("[data-codexhost-mainline-hover]")?.shadowRoot?.querySelector<HTMLElement>(".summary:not([hidden])");
+              return summary ? { count: summary.getAttribute("data-count"), at: [summary.style.left, summary.style.top] } : null;
+            })(),
           };
         })(),
       };

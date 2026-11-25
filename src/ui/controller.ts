@@ -88,10 +88,26 @@ export function diagnosticsOn(view: Window | null | undefined): boolean {
   }
 }
 
+/**
+ * A random id for one window or page, sent with its snapshots: the backend keeps the conversation
+ * open in each apart, so two on different conversations do not count as switching all the time.
+ * (randomUUID exists only on https and localhost; codexhost Web may be served over plain http.)
+ */
+export function clientId(view: Window | null): string {
+  try {
+    const uuid = (view?.crypto ?? globalThis.crypto)?.randomUUID?.();
+    if (uuid) return uuid;
+  } catch {
+    // Not a secure context.
+  }
+  return `c${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12).padEnd(10, "0")}`;
+}
+
 export function startController(adapter: SurfaceAdapter): ControllerHandle {
   const doc = adapter.doc;
   const view = doc.defaultView;
   const locale = localeOf(doc.documentElement.lang || view?.navigator.language);
+  const client = clientId(view);
   let data: LiveData | null = null;
   let current: string | null = null;
   /** The open conversation's view, and the snapshot version it was loaded for. */
@@ -214,6 +230,7 @@ export function startController(adapter: SurfaceAdapter): ControllerHandle {
 
   const pollOnce = async () => {
     const params: SnapshotParams = {
+      client,
       ...(data ? { version: data.version } : {}),
       ...(current ? { focus: { threadId: current, surface: adapter.surface } } : {}),
       ...(localeSent ? {} : { locale, localeSource: "surface" as const }),

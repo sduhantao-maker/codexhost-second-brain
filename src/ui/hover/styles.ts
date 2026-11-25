@@ -1,5 +1,6 @@
 /**
- * Styles of the sidebar hover card and the row badge, injected into their shadow root. The palette
+ * Styles of the sidebar hover card, the row badge, the bells and the summary of news with its list,
+ * injected into their shadow root. The palette
  * repeats `.root` of src/ui/styles.css so the card and the capsule look alike (text at 4.5:1 or
  * more in both schemes); `data-scheme="dark"` comes from detectScheme().
  */
@@ -852,6 +853,113 @@ a.ref {
   white-space: nowrap;
   pointer-events: none;
   transform: translate(-50%, -50%);
+}
+
+/* "🔔 N" at the top of the sidebar: news whose conversation has no row in sight. */
+.summary {
+  position: fixed;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  box-sizing: border-box;
+  height: 20px;
+  margin: 0;
+  padding: 0 7px 0 5px;
+  border: 1px solid var(--cxm-border);
+  border-radius: 10px;
+  background: var(--cxm-bg-solid);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  color: var(--cxm-fg);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.summary:hover,
+.summary[aria-expanded="true"] {
+  border-color: var(--cxm-amber-dot);
+}
+
+.summary:focus-visible,
+.news-list .btn:focus-visible {
+  outline: 2px solid var(--cxm-accent);
+  outline-offset: 1px;
+}
+
+.summary-bell {
+  font-size: 11px;
+}
+
+/* The list it opens. */
+.news-list {
+  position: fixed;
+  box-sizing: border-box;
+  width: 300px;
+  max-width: calc(100vw - 16px);
+  max-height: min(60vh, 420px);
+  padding: 8px 10px 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--cxm-border);
+  border-radius: 10px;
+  background: var(--cxm-bg-solid);
+  box-shadow: var(--cxm-shadow);
+  overflow-wrap: anywhere;
+  cursor: default;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.news-list .section-title {
+  color: var(--cxm-amber);
+}
+
+.news-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.news-item {
+  padding: 6px 0;
+}
+
+.news-item + .news-item {
+  border-top: 1px solid var(--cxm-border);
+}
+
+.news-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.news-item-head .ref-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
+.news-item-meta {
+  margin-top: 2px;
+  color: var(--cxm-muted);
+  font-size: 11.5px;
+}
+
+.news-item-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
 }
 
 .badge .diamond {

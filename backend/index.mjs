@@ -5322,9 +5322,11 @@ var MAINTAIN_EVERY_MS = 3e4;
 var ACTIVE_WINDOW_MS = 6e4;
 var SETTINGS_TTL_MS = 3e3;
 var RECENTLY_USED_MS = 10 * 6e4;
-var GITHUB_EVERY_MS = 3 * 6e4;
+var GITHUB_EVERY_MS = 6e4;
 var IDLE_EVERY_MS = 10 * 6e4;
-var ALERTS_SHOWN = 10;
+var CLIENT_ID = /^[A-Za-z0-9-]{8,64}$/u;
+var FOCUS_LIMIT = 64;
+var ALERTS_SHOWN = 50;
 var REVEAL_MS = 2 * 6e4;
 var SWEEP_UPLOADS_MS = 10 * 6e4;
 var STOP_WAIT_MS = 700;
@@ -5333,7 +5335,7 @@ var OLD_FOLDER_EVERY_MS = 3e4;
 function homeAsTilde(file, home = os4.homedir()) {
   return home && (file === home || file.startsWith(`${home}${path17.sep}`)) ? `~${file.slice(home.length)}` : file;
 }
-var VERSION2 = true ? "0.10.2" : "dev";
+var VERSION2 = true ? "0.10.3" : "dev";
 var isRecord18 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var own3 = (record, key) => Object.hasOwn(record, key) ? record[key] : void 0;
 var contentKey = (value) => createHash("sha1").update(JSON.stringify(value)).digest("base64url").slice(0, 16);
@@ -5449,6 +5451,9 @@ async function activate(ctx, options = {}) {
   let lastSnapshotAt = 0;
   const focus = /* @__PURE__ */ new Map();
   const focusIds = () => [...focus.values()].filter((item) => Date.now() - item.at < ACTIVE_WINDOW_MS).map((item) => item.threadId);
+  const forgetClosed = () => {
+    for (const [key, item] of focus) if (Date.now() - item.at >= ACTIVE_WINDOW_MS || focus.size > FOCUS_LIMIT) focus.delete(key);
+  };
   let soon;
   let maintaining;
   const currentState = async () => {
@@ -5574,13 +5579,13 @@ async function activate(ctx, options = {}) {
       lastUsedAt = Date.now();
       const focused = isRecord18(params.focus) && isThreadId(params.focus.threadId) ? params.focus : void 0;
       if (focused && (focused.surface === "desktop" || focused.surface === "web")) {
-        const before = focus.get(focused.surface)?.threadId;
-        focus.set(focused.surface, { threadId: focused.threadId, at: Date.now() });
-        if (before !== focused.threadId) {
-          maintainSoon();
-          const threadId = focused.threadId;
-          if (alerts(await currentIndex()).length) await updateIndex(refs, (draft) => markSeenForThread(draft, threadId));
-        }
+        const client = typeof params.client === "string" && CLIENT_ID.test(params.client) ? params.client : void 0;
+        const key = client ? `${focused.surface}:${client}` : focused.surface;
+        const before = focus.get(key)?.threadId;
+        focus.delete(key);
+        focus.set(key, { threadId: focused.threadId, at: Date.now() });
+        forgetClosed();
+        if (before !== focused.threadId) maintainSoon();
       }
       let state = await currentState();
       if (params.locale !== void 0) {
@@ -5945,6 +5950,15 @@ ${cleanText(problem)}`;
     await updateIndex(refs, (draft) => markSeen(draft, key));
     return { ok: true };
   });
+  ctx.handle("refs.seenForThread", async (raw) => {
+    try {
+      const threadId = threadIdOf(raw);
+      const { result } = await updateIndex(refs, (draft) => markSeenForThread(draft, threadId));
+      return clean({ ok: true, keys: result });
+    } catch (error) {
+      rethrow(error);
+    }
+  });
   ctx.handle("favorites.add", async (raw) => {
     try {
       lastUsedAt = Date.now();
@@ -6113,8 +6127,10 @@ ${cleanText(problem)}`;
       log.error("watch GitHub", error);
     } finally {
       if (!stopped) {
-        githubTimer = setTimeout(() => void (githubRound = watchGitHub()), recentlyUsed() ? GITHUB_EVERY_MS : IDLE_EVERY_MS);
+        const delay = recentlyUsed() ? GITHUB_EVERY_MS : IDLE_EVERY_MS;
+        githubTimer = setTimeout(() => void (githubRound = watchGitHub()), delay);
         githubTimer.unref?.();
+        options.githubScheduled?.(delay);
       }
     }
   };

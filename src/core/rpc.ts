@@ -8,6 +8,11 @@ export type Surface = "desktop" | "web" | "page";
 export interface SnapshotParams {
   /** The version the caller already has; an unchanged snapshot comes back as `{ version }`. */
   version?: string;
+  /**
+   * A random id the window or page makes for itself when it starts (8 to 64 letters, digits and
+   * dashes), so that the backend keeps the conversation open in each one apart.
+   */
+  client?: string;
   focus?: { threadId: string; surface: Surface };
   locale?: Locale;
   /** The overview page knows the UI language for sure; the capsule only guesses it. */

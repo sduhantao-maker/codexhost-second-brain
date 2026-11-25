@@ -1474,10 +1474,19 @@
       return false;
     }
   }
+  function clientId(view) {
+    try {
+      const uuid = (view?.crypto ?? globalThis.crypto)?.randomUUID?.();
+      if (uuid) return uuid;
+    } catch {
+    }
+    return `c${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12).padEnd(10, "0")}`;
+  }
   function startController(adapter) {
     const doc = adapter.doc;
     const view = doc.defaultView;
     const locale = localeOf(doc.documentElement.lang || view?.navigator.language);
+    const client = clientId(view);
     let data = null;
     let current = null;
     let loaded = null;
@@ -1585,6 +1594,7 @@
     };
     const pollOnce = async () => {
       const params = {
+        client,
         ...data ? { version: data.version } : {},
         ...current ? { focus: { threadId: current, surface: adapter.surface } } : {},
         ...localeSent ? {} : { locale, localeSource: "surface" }
@@ -1762,6 +1772,10 @@
     news: "PR \u4E0E Issue \u65B0\u52A8\u6001",
     reason: (reason) => REASONS_ZH[reason] ?? "\u6709\u65B0\u52A8\u6001",
     seen: "\u77E5\u9053\u4E86",
+    summary: (count) => `${count} \u6761 PR \u4E0E Issue \u65B0\u52A8\u6001`,
+    summaryTip: (count) => `${count} \u6761 PR \u4E0E Issue \u65B0\u52A8\u6001\uFF0C\u5B83\u4EEC\u6240\u5728\u7684\u5BF9\u8BDD\u5728\u4FA7\u680F\u91CC\u770B\u4E0D\u5230\uFF08\u5728\u6536\u8D77\u7684\u5206\u7EC4\u91CC\u3001\u6EDA\u51FA\u4E86\u5217\u8868\u6216\u6CA1\u6709\u5217\u51FA\uFF09`,
+    openConversation: "\u6253\u5F00\u5BF9\u8BDD",
+    fromConversation: (title, turn) => turn > 0 ? `\u6765\u81EA\u5BF9\u8BDD\u300C${title}\u300D\u7B2C ${turn} \u8F6E` : `\u6765\u81EA\u5BF9\u8BDD\u300C${title}\u300D`,
     summarized: (time) => `\u6A21\u578B\u51DD\u7EC3 \xB7 ${time}`,
     resummarize: "\u21BB \u91CD\u65B0\u51DD\u7EC3",
     summarizeNow: "\u21BB \u7ACB\u5373\u51DD\u7EC3",
@@ -1820,6 +1834,10 @@
     news: "PR and issue news",
     reason: (reason) => REASONS_EN[reason] ?? "New activity",
     seen: "Got it",
+    summary: (count) => `${count} new on your PRs and issues`,
+    summaryTip: (count) => `${count} new on your PRs and issues, from conversations the sidebar does not show (in a collapsed group, scrolled away, or not listed)`,
+    openConversation: "Open conversation",
+    fromConversation: (title, turn) => turn > 0 ? `From "${title}", turn ${turn}` : `From "${title}"`,
     summarized: (time) => `Summarized ${time}`,
     resummarize: "\u21BB Summarize again",
     summarizeNow: "\u21BB Summarize now",
@@ -2924,17 +2942,29 @@
       return [];
     }
   }
+  function drawnPart(popover) {
+    const own = boxOf2(popover);
+    if (own.width > 0 && own.height > 0) return popover;
+    const view = popover.ownerDocument.defaultView;
+    for (const inner of popover.querySelectorAll("*")) {
+      const box = boxOf2(inner);
+      if (box.width > 0 && box.height > 0 && view?.getComputedStyle(inner).position === "fixed") return inner;
+    }
+    return null;
+  }
   function hostPopup(doc, row, sidebar, skip) {
     const edges = [row.right, ...sidebar && sidebar.width > 0 ? [sidebar.right] : []];
     const view = doc.defaultView;
     const popovers = openPopovers(doc);
-    for (const element of [...popovers, ...doc.body?.children ?? []]) {
-      if (skip(element)) continue;
+    for (const candidate of [...popovers, ...doc.body?.children ?? []]) {
+      if (skip(candidate)) continue;
+      const element = popovers.includes(candidate) ? drawnPart(candidate) : candidate;
+      if (!element) continue;
       const box = boxOf2(element);
       if (box.width <= 0 || box.height <= 0 || box.width > POPUP_MAX_WIDTH) continue;
       if (!edges.some((edge) => Math.abs(box.left - edge) <= POPUP_EDGE)) continue;
       if (box.bottom < row.top - POPUP_REACH || box.top > row.bottom + POPUP_REACH) continue;
-      if (!popovers.includes(element) && view?.getComputedStyle(element).position !== "fixed") continue;
+      if (!popovers.includes(candidate) && view?.getComputedStyle(element).position !== "fixed") continue;
       return element;
     }
     return null;
@@ -2998,12 +3028,34 @@
     }
     return null;
   }
+  function inSight(row, sidebar) {
+    let shown = boxOf2(row);
+    if (shown.width <= 0 || shown.height <= 0) return null;
+    const view = row.ownerDocument.defaultView;
+    const own = view?.getComputedStyle(row);
+    if (own?.visibility === "hidden" || own?.display === "none") return null;
+    if (typeof row.checkVisibility === "function" && !row.checkVisibility()) return null;
+    const last = sidebar?.contains(row) ? sidebar : null;
+    for (let node = row.parentElement; node && shown; node = node.parentElement) {
+      const style = view?.getComputedStyle(node);
+      if (style?.display === "none") return null;
+      if (node === last || clips(style)) shown = intersection(shown, boxOf2(node));
+      if (node === last) break;
+    }
+    if (shown && sidebar && !last) {
+      const area = boxOf2(sidebar);
+      if (area.width > 0 && area.height > 0) shown = intersection(shown, area);
+    }
+    return shown;
+  }
   function newsBadgeSpot(row, sidebar) {
     const box = boxOf2(row);
     if (box.width <= 0 || box.height <= 0) return null;
     const middle = box.top + Math.min(box.height, LINE_MAX) / 2;
     const area = sidebar ? boxOf2(sidebar) : null;
     if (area && area.height > 0 && (middle < area.top || middle > area.bottom)) return null;
+    const shown = inSight(row, sidebar);
+    if (!shown || middle < shown.top || middle > shown.bottom) return null;
     const icon2 = leadingIcon(row, box);
     const iconLeft = icon2?.left ?? box.left + 12;
     const from = Math.max(area && area.width > 0 ? area.left : Number.NEGATIVE_INFINITY, iconLeft - GUTTER_MAX);
@@ -3011,6 +3063,134 @@
     if (to - from >= GUTTER_MIN) return { x: Math.round((from + to) / 2), y: Math.round(middle) };
     if (icon2) return { x: Math.round(icon2.right - 3), y: Math.round(icon2.top + 2) };
     return { x: Math.round(box.left + 12), y: Math.round(middle) };
+  }
+  var ROW_CONTROLS = "button, a[href], [role='button'], [role='link'], [role='menuitem'], [role='checkbox'], [role='switch']";
+  var FIELDS = "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='textbox'], [role='combobox'], [role='searchbox']";
+  function onRowControl(target, row) {
+    const width = boxOf2(row).width;
+    for (let node = target instanceof Element ? target : null; node && node !== row; node = node.parentElement) {
+      if (node.matches(FIELDS)) return true;
+      if (node.matches(ROW_CONTROLS) && boxOf2(node).width < width / 2) return true;
+    }
+    return false;
+  }
+  var BUTTONS = "button, a[href], [role='button'], [role='link']";
+  var CONTROLS = `${BUTTONS}, ${FIELDS}, summary, label, [role='menuitem'], [role='tab'], [role='treeitem'], [role='option'], [role='checkbox'], [role='radio'], [role='switch']`;
+  var PICTURES = "svg, img, canvas, video, [role='img']";
+  var WIDE_SHARE = 0.6;
+  var SUMMARY_PAD = 6;
+  var SUMMARY_GAP = 3;
+  var SUMMARY_BAND = 160;
+  var SUMMARY_SIZE = { width: 44, height: 20 };
+  var SUMMARY_STEP = 2;
+  var overlap = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  function intersection(a, b) {
+    const left = Math.max(a.left, b.left);
+    const top = Math.max(a.top, b.top);
+    const right = Math.min(a.right, b.right);
+    const bottom = Math.min(a.bottom, b.bottom);
+    return right > left && bottom > top ? { left, top, right, bottom, width: right - left, height: bottom - top } : null;
+  }
+  function clips(style) {
+    return Boolean(style) && [style.overflow, style.overflowX, style.overflowY].some((value) => Boolean(value) && value !== "visible");
+  }
+  function textBoxes(element, fallback) {
+    const boxes = [];
+    for (const node of element.childNodes) {
+      if (node.nodeType !== 3 || !node.textContent?.trim()) continue;
+      let box = null;
+      try {
+        const range = element.ownerDocument.createRange();
+        range.selectNodeContents(node);
+        const rect = range.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) box = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+      } catch {
+      }
+      boxes.push(box ?? fallback);
+    }
+    return boxes;
+  }
+  function hostContent(doc, area, skip, isRow = () => false) {
+    const view = doc.defaultView;
+    const content = { hard: [], buttons: [], rows: [], scrolling: [] };
+    const wide = area.width * WIDE_SHARE;
+    const visit = (parent, clip, parentCursor, depth) => {
+      if (depth > 80) return;
+      for (const element of parent.children) {
+        if (skip(element)) continue;
+        const rect = boxOf2(element);
+        if (rect.width <= 0 || rect.height <= 0) {
+          const style2 = view?.getComputedStyle(element);
+          if (style2?.display !== "none") visit(element, clips(style2) ? intersection(clip, rect) ?? clip : clip, style2?.cursor || parentCursor, depth + 1);
+          continue;
+        }
+        const shown = intersection(rect, clip);
+        if (!shown || !overlap(shown, area)) continue;
+        const style = view?.getComputedStyle(element);
+        const cursor = style?.cursor ?? "";
+        const clipping = clips(style);
+        const inner = clipping ? intersection(clip, rect) ?? clip : clip;
+        if (style?.visibility === "hidden") {
+          visit(element, inner, cursor, depth + 1);
+          continue;
+        }
+        if (clipping && /auto|scroll|overlay/u.test(style?.overflowY ?? "") && element.scrollHeight - element.clientHeight > 1) content.scrolling.push(shown);
+        if (element.matches(PICTURES)) {
+          content.hard.push(shown);
+          continue;
+        }
+        const clickable = element.matches(CONTROLS) || isRow(element) || cursor === "pointer" && parentCursor !== "pointer";
+        if (clickable && (shown.width < wide || element.matches(FIELDS))) {
+          content.hard.push(shown);
+          continue;
+        }
+        if (clickable) (element.matches(BUTTONS) ? content.buttons : content.rows).push(shown);
+        for (const text of textBoxes(element, rect)) {
+          const seen = intersection(text, clip);
+          if (seen) content.hard.push(seen);
+        }
+        visit(element, inner, cursor, depth + 1);
+      }
+    };
+    const root = doc.body ?? doc.documentElement;
+    const width = view?.innerWidth || area.right;
+    const height = view?.innerHeight || area.bottom;
+    visit(root, { left: 0, top: 0, right: width, bottom: height, width, height }, view?.getComputedStyle(root).cursor ?? "", 0);
+    return content;
+  }
+  function rightmostGap(boxes, top, bottom, from, to, width) {
+    const taken = boxes.filter((box) => box.top < bottom && box.bottom > top).map((box) => [box.left - SUMMARY_GAP, box.right + SUMMARY_GAP]).sort((a, b) => b[1] - a[1]);
+    let end = to;
+    for (const [left, right] of taken) {
+      if (right < end && end - Math.max(right, from) >= width) return end - width;
+      end = Math.min(end, left);
+      if (end - from < width) return null;
+    }
+    return end - from >= width ? end - width : null;
+  }
+  function summarySpot(sidebar, size, viewport, content, avoid = []) {
+    const left = Math.max(sidebar.left, 0) + SUMMARY_PAD;
+    const right = Math.min(sidebar.right, viewport.width) - SUMMARY_PAD;
+    const top = Math.max(sidebar.top, 0);
+    const bottom = Math.min(top + SUMMARY_BAND, sidebar.bottom, viewport.height - EDGE3);
+    const inBand = (y) => y >= top && y + size.height <= bottom;
+    const aboveIt = (y) => y >= EDGE3 && y + size.height <= top;
+    const level = [...new Set([...content.hard, ...content.buttons, ...content.rows, ...avoid].map((box2) => Math.round(box2.top + box2.height / 2 - size.height / 2)))];
+    const lines = [...level.filter(inBand).sort((a, b) => a - b)];
+    for (let y = top + SUMMARY_PAD; inBand(y); y += SUMMARY_STEP) lines.push(y);
+    lines.push(...level.filter(aboveIt).sort((a, b) => b - a));
+    for (let y = top - SUMMARY_PAD - size.height; y >= EDGE3; y -= SUMMARY_STEP) lines.push(y);
+    const find = (boxes) => {
+      for (const y of lines) {
+        const x = rightmostGap(boxes, y - SUMMARY_GAP, y + size.height + SUMMARY_GAP, left, right, size.width);
+        if (x !== null) return { left: Math.round(x), top: Math.round(y) };
+      }
+      return null;
+    };
+    const hard = [...content.hard, ...avoid];
+    const spot = find([...hard, ...content.buttons, ...content.rows, ...content.scrolling]) ?? find([...hard, ...content.buttons, ...content.rows]) ?? find([...hard, ...content.buttons]) ?? find(hard) ?? { left: Math.round(Math.max(left, right - size.width)), top: Math.round(top + SUMMARY_PAD) };
+    const box = { ...spot, right: spot.left + size.width, bottom: spot.top + size.height, width: size.width, height: size.height };
+    return { ...spot, over: content.scrolling.some((list) => overlap(list, box)) };
   }
   function badgeSpot(row, sidebar) {
     const full = boxOf2(row);
@@ -3879,6 +4059,113 @@ a.ref {
   transform: translate(-50%, -50%);
 }
 
+/* "\u{1F514} N" at the top of the sidebar: news whose conversation has no row in sight. */
+.summary {
+  position: fixed;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  box-sizing: border-box;
+  height: 20px;
+  margin: 0;
+  padding: 0 7px 0 5px;
+  border: 1px solid var(--cxm-border);
+  border-radius: 10px;
+  background: var(--cxm-bg-solid);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  color: var(--cxm-fg);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.summary:hover,
+.summary[aria-expanded="true"] {
+  border-color: var(--cxm-amber-dot);
+}
+
+.summary:focus-visible,
+.news-list .btn:focus-visible {
+  outline: 2px solid var(--cxm-accent);
+  outline-offset: 1px;
+}
+
+.summary-bell {
+  font-size: 11px;
+}
+
+/* The list it opens. */
+.news-list {
+  position: fixed;
+  box-sizing: border-box;
+  width: 300px;
+  max-width: calc(100vw - 16px);
+  max-height: min(60vh, 420px);
+  padding: 8px 10px 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--cxm-border);
+  border-radius: 10px;
+  background: var(--cxm-bg-solid);
+  box-shadow: var(--cxm-shadow);
+  overflow-wrap: anywhere;
+  cursor: default;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.news-list .section-title {
+  color: var(--cxm-amber);
+}
+
+.news-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.news-item {
+  padding: 6px 0;
+}
+
+.news-item + .news-item {
+  border-top: 1px solid var(--cxm-border);
+}
+
+.news-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.news-item-head .ref-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
+.news-item-meta {
+  margin-top: 2px;
+  color: var(--cxm-muted);
+  font-size: 11.5px;
+}
+
+.news-item-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
+}
+
 .badge .diamond {
   color: var(--cxm-accent);
   font-size: 9px;
@@ -3942,6 +4229,15 @@ a.ref {
   var ERROR_LENGTH = 80;
   var CONFIRM_MS2 = 3e3;
   var PICKER_GRACE_MS = 1e3;
+  var PRESS_MS = 5e3;
+  var ACTIVATED_MS = 1500;
+  var SEEN_WAIT_MS = 1e3;
+  var LIST_ID = "cxm-news-list";
+  var LIST_WIDTH = 300;
+  var LIST_GAP = 6;
+  var WINDOW_BUTTONS = { left: 0, top: 0, right: 84, bottom: 44, width: 84, height: 44 };
+  var OVERLAYS = "[data-codexhost-mainline], [data-codexhost-mainline-hover], [data-codexhost-mainline-favorites]";
+  var quoted = (value) => value.replace(/["\\]/gu, "\\$&");
   var Stopped = class extends Error {
   };
   function pastedName(file, next) {
@@ -4040,8 +4336,25 @@ a.ref {
     #summaryFailed = null;
     /** Conversations with unseen GitHub news about PRs and issues they started, and how many. */
     #news = /* @__PURE__ */ new Map();
+    /** That news, from the latest snapshot. */
+    #alerts = [];
     /** The bell on each such conversation's row in the sidebar. */
     #markers = /* @__PURE__ */ new Map();
+    /** The row pressed last, until its click. */
+    #press = null;
+    /** The conversation whose news was last marked seen from its row, and when. */
+    #activated = null;
+    /** "🔔 N" at the top of the sidebar: news whose conversation has no row in sight here. */
+    #summary;
+    /** The list the summary opens. */
+    #list;
+    /** The news the summary counts, newest first. */
+    #unplaced = [];
+    /** What the summary's place was worked out for (sidebar, window and text), and whether it sits over a list that scrolls. */
+    #summaryFor = "";
+    #summaryOverList = false;
+    /** What the list shows now, to skip rebuilding it when nothing changed. */
+    #listShows = "";
     #stopped = false;
     constructor(adapter, controller) {
       this.#adapter = adapter;
@@ -4067,7 +4380,13 @@ a.ref {
       this.#badge = h("div", { class: "badge", attrs: { "aria-hidden": "true", hidden: "" } });
       this.#picker = h("input", { class: "picker", attrs: { type: "file", multiple: "", hidden: "", tabindex: "-1", "aria-hidden": "true" } });
       this.#live = h("div", { class: "sr-only", attrs: { role: "status", "aria-live": "polite" } });
-      this.#root = h("div", { class: "root" }, this.#card, this.#badge, this.#picker, this.#live);
+      this.#summary = h("button", {
+        class: "summary",
+        attrs: { type: "button", hidden: "", "aria-haspopup": "dialog", "aria-expanded": "false", "aria-controls": LIST_ID },
+        on: { click: () => this.#toggleList() }
+      });
+      this.#list = h("div", { class: "news-list", attrs: { id: LIST_ID, role: "dialog", hidden: "" } });
+      this.#root = h("div", { class: "root" }, this.#card, this.#badge, this.#summary, this.#list, this.#picker, this.#live);
       shadow.append(this.#root);
       this.#actions = {
         open: (threadId) => {
@@ -4155,7 +4474,14 @@ a.ref {
         }, 0);
       });
       this.#listen(doc, "keydown", (event) => {
-        if (event.key === "Escape" && (this.#shown || this.#showTimer)) this.#hide();
+        if (event.key !== "Escape") return;
+        if (this.#shown || this.#showTimer) this.#hide();
+        if (!this.#list.hidden) this.#closeList(this.#focusIn(this.#list) || this.#focusIn(this.#summary));
+      }, true);
+      this.#listen(doc, "pointerdown", (event) => {
+        if (this.#list.hidden) return;
+        const path = event.composedPath();
+        if (!path.includes(this.#list) && !path.includes(this.#summary)) this.#closeList(false);
       }, true);
       this.#listen(doc, "visibilitychange", () => {
         if (doc.visibilityState === "hidden" && !this.#holding()) this.#reset();
@@ -4218,7 +4544,7 @@ a.ref {
       this.#bindSidebar();
       const rebind = setInterval(() => {
         this.#bindSidebar();
-        this.#placeMarkers();
+        this.#placeMarkers(true);
       }, REBIND_MS);
       this.#cleanup.push(() => clearInterval(rebind));
     }
@@ -4243,6 +4569,9 @@ a.ref {
       }
       this.#host.remove();
       this.#markers.clear();
+      this.#alerts = [];
+      this.#unplaced = [];
+      this.#press = null;
       this.#cache.clear();
       this.#stale.clear();
       this.#errors.clear();
@@ -4274,26 +4603,87 @@ a.ref {
       const over = (event) => this.#onOver(event);
       const out = (event) => this.#onOut(event);
       const leave = () => this.#leaveRow();
-      const down = () => this.#hide();
+      const down = (event) => {
+        this.#notePress(event);
+        this.#hide();
+      };
+      const click = (event) => this.#onRowClick(event);
+      const key = (event) => this.#onRowKey(event);
       next.addEventListener("pointerover", over);
       next.addEventListener("pointerout", out);
       next.addEventListener("pointerleave", leave);
       next.addEventListener("pointerdown", down, true);
+      next.addEventListener("click", click, true);
+      next.addEventListener("keydown", key, true);
       this.#unbindSidebar = () => {
         next.removeEventListener("pointerover", over);
         next.removeEventListener("pointerout", out);
         next.removeEventListener("pointerleave", leave);
         next.removeEventListener("pointerdown", down, true);
+        next.removeEventListener("click", click, true);
+        next.removeEventListener("keydown", key, true);
       };
+    }
+    /** The conversation row under an event target, if any. */
+    #rowAt(target) {
+      try {
+        return this.#adapter.rowAt?.(target) ?? null;
+      } catch {
+        return null;
+      }
+    }
+    /** Whether this conversation's bell is on screen in the sidebar now. */
+    #bellInSight(threadId) {
+      const marker = this.#markers.get(threadId);
+      return Boolean(marker?.isConnected && !marker.hidden);
+    }
+    /**
+     * Whether the user can see that this conversation has news: its bell in the sidebar, or the news
+     * on top of its hover card. The bell hides while its row is hovered, so the row under the pointer
+     * counts when the bell was in sight as the pointer came onto it.
+     */
+    #newsShowing(threadId) {
+      if (this.#bellInSight(threadId)) return true;
+      if (this.#row?.threadId === threadId && this.#row.bell) return true;
+      return this.#shown?.threadId === threadId && !this.#card.hidden && this.#card.querySelector('[data-section="news"]') !== null;
+    }
+    #notePress(event) {
+      const hit = this.#rowAt(event.target);
+      this.#press = hit && !onRowControl(event.target, hit.element) ? { threadId: hit.threadId, box: boxOf2(hit.element), at: Date.now(), showing: this.#newsShowing(hit.threadId) } : null;
+    }
+    /**
+     * A click that opens a conversation from its row while its bell or its card's news showed (as it
+     * was when the row was pressed) marks the news of the PRs and issues it started as seen. Clicks on
+     * the row's own small buttons (pin, archive, a menu) do not open it, and do not count.
+     */
+    #onRowClick(event) {
+      const press = this.#press;
+      this.#press = null;
+      const recent = press && Date.now() - press.at < PRESS_MS ? press : null;
+      let hit = this.#rowAt(event.target);
+      if (!hit && recent && event.clientX >= recent.box.left && event.clientX <= recent.box.right && event.clientY >= recent.box.top && event.clientY <= recent.box.bottom)
+        hit = { element: null, threadId: recent.threadId };
+      if (!hit || hit.element && onRowControl(event.target, hit.element)) return;
+      const showing = recent?.threadId === hit.threadId ? recent.showing : this.#newsShowing(hit.threadId);
+      if (showing) this.#seenFromRow(hit.threadId);
+    }
+    /** Enter on a row opens it too (a row that is a button or link also gets a click, which counts once with it). */
+    #onRowKey(event) {
+      if (event.key !== "Enter" || event.isComposing || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const hit = this.#rowAt(event.target);
+      if (!hit || onRowControl(event.target, hit.element)) return;
+      if (this.#newsShowing(hit.threadId)) this.#seenFromRow(hit.threadId);
+    }
+    /** Marks seen the news of every PR and issue this conversation started, as opening it from its row while the news showed. */
+    #seenFromRow(threadId) {
+      const last = this.#activated;
+      if (last?.threadId === threadId && Date.now() - last.at < ACTIVATED_MS) return;
+      this.#activated = { threadId, at: Date.now() };
+      void Promise.resolve().then(() => this.#adapter.invoke("refs.seenForThread", { threadId })).then(() => this.#controller.refresh()).catch(() => void 0);
     }
     #onOver(event) {
       if (event.pointerType === "touch") return;
-      let hit = null;
-      try {
-        hit = this.#adapter.rowAt?.(event.target) ?? null;
-      } catch {
-        hit = null;
-      }
+      const hit = this.#rowAt(event.target);
       if (hit) this.#enterRow(hit);
       else this.#leaveRow();
     }
@@ -4308,7 +4698,8 @@ a.ref {
       if (this.#shown && this.#holding() && found.threadId !== this.#shown.threadId) return;
       const row = this.#row;
       if (row && row.element === found.element && row.threadId === found.threadId) return;
-      const hit = { element: found.element, threadId: found.threadId, box: boxOf2(found.element) };
+      const bell = this.#bellInSight(found.threadId) || row?.threadId === found.threadId && row.bell;
+      const hit = { element: found.element, threadId: found.threadId, box: boxOf2(found.element), bell };
       this.#row = hit;
       clearTimeout(this.#prefetchTimer);
       this.#renderBadge();
@@ -4530,18 +4921,18 @@ a.ref {
       clearTimeout(this.#hideTimer);
       this.#hideTimer = void 0;
     }
-    /** Keeps the card and badge on their row while the sidebar scrolls; other scrolling is ignored. */
+    /** Keeps the card, the badge and the bells on their rows while the sidebar scrolls; other scrolling is ignored. */
     #onScroll(event) {
-      const element = this.#shown?.element ?? this.#row?.element ?? (this.#markers.size ? this.#sidebar : null);
+      const element = this.#shown?.element ?? this.#row?.element ?? (this.#news.size ? this.#sidebar : null);
       if (!element || this.#framePending) return;
       const target = event?.target;
-      if (target instanceof Node && target !== this.#doc && !target.contains(element)) return;
+      if (target instanceof Node && target !== this.#doc && !target.contains(element) && !(this.#news.size && this.#sidebar?.contains(target))) return;
       this.#framePending = true;
       const run = () => {
         this.#framePending = false;
         if (this.#stopped) return;
         this.#reposition();
-        this.#placeMarkers();
+        this.#placeMarkers(this.#summaryOverList);
       };
       if (typeof this.#win.requestAnimationFrame === "function") this.#win.requestAnimationFrame(run);
       else setTimeout(run, 16);
@@ -4562,6 +4953,7 @@ a.ref {
       clearTimeout(this.#prefetchTimer);
       this.#row = null;
       this.#badge.hidden = true;
+      if (!this.#list.hidden) this.#closeList(false);
     }
     // -------------------------------------------------------------------------------------------
     // Data
@@ -4752,7 +5144,7 @@ a.ref {
       this.#bridge(popup);
       const spot = cardSpot(shown.box, sidebar, size, viewport, popup ? boxOf2(popup) : null);
       this.#card.toggleAttribute("data-beside", popup !== null);
-      if (popup) this.#card.setAttribute("data-beside", popup.hasAttribute("popover") ? "popover" : "fixed");
+      if (popup) this.#card.setAttribute("data-beside", popup.closest("[popover]") ? "popover" : "fixed");
       this.#card.style.left = `${spot.left}px`;
       this.#card.style.top = `${spot.top}px`;
     }
@@ -4765,30 +5157,33 @@ a.ref {
         if (threadId) news2.set(threadId, (news2.get(threadId) ?? 0) + 1);
       }
       this.#news = news2;
+      this.#alerts = data.alerts ?? [];
       this.#placeMarkers();
     }
     /**
      * A bell on the sidebar row of each conversation with unseen GitHub news, so a maintainer's
-     * reply points at the conversation it belongs to. The hovered row shows its card instead.
+     * reply points at the conversation it belongs to; the hovered row shows its card instead. News
+     * whose conversation has no row in sight goes to the summary at the top of the sidebar.
+     * `relayout`: the summary's place is worked out again even if the sidebar did not move.
      */
-    #placeMarkers() {
+    #placeMarkers(relayout = false) {
       if (this.#stopped) return;
       for (const [threadId, marker] of this.#markers)
         if (!this.#news.has(threadId)) {
           marker.remove();
           this.#markers.delete(threadId);
         }
-      if (!this.#news.size || !this.#adapter.rowsFor) return;
       const t = this.#strings();
+      const unplaced = /* @__PURE__ */ new Set();
       for (const [threadId, count] of this.#news) {
         let spot = null;
-        if (this.#row?.threadId !== threadId)
-          for (const row of this.#adapter.rowsFor(threadId)) {
-            spot = newsBadgeSpot(row, this.#sidebar);
-            if (spot) break;
-          }
+        for (const row of this.#adapter.rowsFor?.(threadId) ?? []) {
+          spot = newsBadgeSpot(row, this.#sidebar);
+          if (spot) break;
+        }
+        if (!spot) unplaced.add(threadId);
         let marker = this.#markers.get(threadId);
-        if (!spot) {
+        if (!spot || this.#row?.threadId === threadId) {
           if (marker) marker.hidden = true;
           continue;
         }
@@ -4806,6 +5201,169 @@ a.ref {
         marker.style.top = `${spot.y}px`;
         marker.hidden = false;
       }
+      this.#unplaced = this.#alerts.filter((ref) => ref.origin && unplaced.has(ref.origin.threadId));
+      this.#placeSummary(relayout);
+    }
+    /**
+     * "🔔 N" at the top of the sidebar, N being the news whose conversation has no row in sight here
+     * (in a collapsed group, scrolled away, or not listed): a button that opens the list of it. It
+     * sits where it covers none of the host's text or buttons (see summarySpot).
+     */
+    #placeSummary(relayout) {
+      const count = this.#unplaced.length;
+      const sidebar = this.#sidebar?.isConnected ? boxOf2(this.#sidebar) : null;
+      if (!count || !sidebar || sidebar.width <= 0 || sidebar.height <= 0) {
+        if (!this.#list.hidden) this.#closeList(this.#focusIn(this.#list) || this.#focusIn(this.#summary));
+        this.#summary.hidden = true;
+        this.#summaryFor = "";
+        this.#summaryOverList = false;
+        return;
+      }
+      const t = this.#strings();
+      const label = t.summary(count);
+      if (this.#summary.getAttribute("data-count") !== String(count) || this.#summary.getAttribute("aria-label") !== label) {
+        this.#summary.replaceChildren(this.#h("span", { class: "summary-bell", text: "\u{1F514}", attrs: { "aria-hidden": "true" } }), this.#h("span", { text: String(count) }));
+        this.#summary.setAttribute("data-count", String(count));
+        this.#summary.setAttribute("aria-label", label);
+        this.#summary.title = t.summaryTip(count);
+      }
+      if (this.#summary.hidden) {
+        this.#mount();
+        this.#summary.hidden = false;
+      }
+      const viewport = { width: this.#win.innerWidth, height: this.#win.innerHeight };
+      const where = [sidebar.left, sidebar.top, sidebar.width, sidebar.height, viewport.width, viewport.height, count, t.locale].join(",");
+      if (relayout || where !== this.#summaryFor) {
+        this.#summaryFor = where;
+        const size = { width: this.#summary.offsetWidth || SUMMARY_SIZE.width, height: this.#summary.offsetHeight || SUMMARY_SIZE.height };
+        const bottom = Math.min(sidebar.top + SUMMARY_BAND, sidebar.bottom, viewport.height);
+        const area = { left: sidebar.left, right: sidebar.right, top: 0, bottom, width: sidebar.width, height: Math.max(0, bottom) };
+        const content = hostContent(
+          this.#doc,
+          area,
+          (element) => element === this.#host || element.matches(OVERLAYS),
+          (element) => this.#rowAt(element)?.element === element
+        );
+        const spot = summarySpot(sidebar, size, viewport, content, this.#adapter.surface === "desktop" ? [WINDOW_BUTTONS] : []);
+        this.#summaryOverList = spot.over;
+        this.#summary.style.left = `${spot.left}px`;
+        this.#summary.style.top = `${spot.top}px`;
+      }
+      if (!this.#list.hidden) {
+        this.#renderList();
+        this.#placeList();
+      }
+    }
+    /** Whether the focus is on `element` or in it, within this overlay. */
+    #focusIn(element) {
+      const active = this.#host.shadowRoot?.activeElement;
+      return Boolean(active && (active === element || element.contains(active)));
+    }
+    #toggleList() {
+      if (this.#list.hidden) this.#openList();
+      else this.#closeList(true);
+    }
+    #openList() {
+      if (!this.#unplaced.length || this.#summary.hidden) return;
+      this.#listShows = "";
+      this.#renderList();
+      this.#list.hidden = false;
+      this.#summary.setAttribute("aria-expanded", "true");
+      this.#placeList();
+      this.#list.querySelector("button")?.focus();
+    }
+    /** Closes the list; `focusSummary`: the focus goes back to the summary (it was in the list). */
+    #closeList(focusSummary) {
+      this.#list.hidden = true;
+      this.#list.replaceChildren();
+      this.#listShows = "";
+      this.#summary.setAttribute("aria-expanded", "false");
+      if (focusSummary && !this.#summary.hidden) this.#summary.focus();
+    }
+    /** Under the summary, or over it where there is no room below; inside the window either way. */
+    #placeList() {
+      const summary = boxOf2(this.#summary);
+      const viewport = { width: this.#win.innerWidth, height: this.#win.innerHeight };
+      const width = this.#list.offsetWidth || LIST_WIDTH;
+      const height = this.#list.offsetHeight || 0;
+      const left = Math.max(8, Math.min(summary.left, viewport.width - 8 - width));
+      const below = summary.bottom + LIST_GAP;
+      const above = summary.top - LIST_GAP - height;
+      const top = below + height <= viewport.height - 8 || above < 8 ? keepInside(below, height, viewport) : above;
+      this.#list.style.left = `${Math.round(left)}px`;
+      this.#list.style.top = `${Math.round(top)}px`;
+    }
+    /**
+     * The news the summary counts, newest first: repository and number, title, what happened and
+     * when, which conversation it came from; "Open conversation" and "Got it" on each.
+     */
+    #renderList() {
+      const t = this.#strings();
+      const now = Date.now();
+      const shows = JSON.stringify([t.locale, Math.floor(now / 6e4), this.#unplaced.map((ref) => [ref.key, ref.title, ref.activity, ref.origin])]);
+      if (shows === this.#listShows) return;
+      this.#listShows = shows;
+      const active = this.#host.shadowRoot?.activeElement;
+      const focused = active && this.#list.contains(active) ? active.getAttribute("data-key") : null;
+      const index = focused ? this.#unplacedIndex(focused) : -1;
+      const h = this.#h;
+      this.#list.setAttribute("aria-label", t.news);
+      this.#list.replaceChildren(
+        h("div", { class: "section-title" }, h("span", { text: t.news })),
+        h("ul", { class: "news-items" }, ...this.#unplaced.map((ref) => this.#listItem(ref, t, now)))
+      );
+      if (!focused) return;
+      const kind = focused.split(":")[0];
+      const again = this.#list.querySelector(`[data-key="${quoted(focused)}"]`) ?? [...this.#list.querySelectorAll(`[data-key^="${kind}:"]`)][Math.min(Math.max(index, 0), this.#unplaced.length - 1)] ?? this.#list.querySelector("button");
+      if (again) again.focus();
+      else this.#summary.focus();
+    }
+    /** Where a button's piece of news was in the list last drawn. */
+    #unplacedIndex(key) {
+      const items = [...this.#list.querySelectorAll(".news-item")];
+      return items.findIndex((item) => item.querySelector(`[data-key="${quoted(key)}"]`) !== null);
+    }
+    #listItem(ref, t, now) {
+      const h = this.#h;
+      const origin = ref.origin;
+      const conversation = origin ? origin.title ?? `#${origin.threadId.slice(0, 8)}` : "";
+      return h(
+        "li",
+        { class: "news-item", attrs: { "data-ref": ref.key } },
+        h(
+          "div",
+          { class: "news-item-head" },
+          h("span", { class: "ref-number", text: `${ref.repo}#${ref.number}` }),
+          ref.title ? h("span", { class: "ref-title", text: ref.title, title: ref.title }) : null
+        ),
+        ref.activity ? h("div", { class: "news-item-meta", text: `${t.reason(ref.activity.reason)} \xB7 ${t.time(ref.activity.at, now)}`, title: t.date(ref.activity.at) }) : null,
+        origin ? h("div", { class: "news-item-meta", text: t.fromConversation(conversation, origin.turn) }) : null,
+        h(
+          "div",
+          { class: "news-item-actions" },
+          origin ? h("button", { class: "btn small", text: t.openConversation, attrs: { type: "button", "data-key": `open:${ref.key}` }, on: { click: () => this.#openFromList(ref) } }) : null,
+          h("button", { class: "btn small", text: t.seen, attrs: { type: "button", "data-key": `seen:${ref.key}` }, on: { click: () => this.#seenFromList(ref) } })
+        )
+      );
+    }
+    /** Opens the conversation a piece of news came from, once its news is marked seen (opening may reload the page). */
+    #openFromList(ref) {
+      const threadId = ref.origin?.threadId;
+      if (!threadId) return;
+      this.#closeList(false);
+      const seen = Promise.resolve().then(() => this.#adapter.invoke("refs.seen", { key: ref.key })).catch(() => void 0);
+      void Promise.race([seen, new Promise((resolve) => setTimeout(resolve, SEEN_WAIT_MS))]).then(() => {
+        if (this.#stopped) return;
+        try {
+          this.#adapter.openThread(threadId);
+        } catch (error) {
+          console.warn("[mainline] could not open the conversation", error);
+        }
+        void this.#controller.refresh();
+      });
+    }
+    #seenFromList(ref) {
+      void Promise.resolve().then(() => this.#adapter.invoke("refs.seen", { key: ref.key })).then(() => this.#controller.refresh()).catch(() => void 0);
     }
     /** "◆ reached/total" beside the hovered row's own buttons, for conversations with milestones. */
     #renderBadge() {
@@ -4835,7 +5393,7 @@ a.ref {
   };
 
   // src/ui/band.ts
-  var CONTROLS = "button, a, input, select, textarea, svg, img, canvas, video, [role='button'], [role='tab']";
+  var CONTROLS2 = "button, a, input, select, textarea, svg, img, canvas, video, [role='button'], [role='tab']";
   function freeBand(container) {
     if (!container) return null;
     const bar = container.getBoundingClientRect();
@@ -4863,7 +5421,7 @@ a.ref {
         if (right > left) add({ ...text.toJSON?.(), left, right, width: right - left, top: text.top, bottom: text.bottom, height: text.height });
       }
     }
-    for (const element of container.querySelectorAll(CONTROLS)) add(element.getBoundingClientRect());
+    for (const element of container.querySelectorAll(CONTROLS2)) add(element.getBoundingClientRect());
     spans.sort((a, b) => a[0] - b[0]);
     let best = null;
     let cursor = bar.left;
@@ -5131,7 +5689,12 @@ a.ref {
                 const row = rows.find((item) => item.threadId === threadId)?.element ?? doc.querySelector(`[${TREE_ROW_ATTRIBUTE}="${threadId}"]`);
                 const icon2 = row ? leadingIcon(row) : null;
                 return { at: [marker.style.left, marker.style.top], row: box(row), icon: icon2 ? [Math.round(icon2.left), Math.round(icon2.top), Math.round(icon2.width)] : null };
-              })
+              }),
+              // "🔔 N": news whose conversation has no row in sight, and where it sits.
+              summary: (() => {
+                const summary = doc.querySelector("[data-codexhost-mainline-hover]")?.shadowRoot?.querySelector(".summary:not([hidden])");
+                return summary ? { count: summary.getAttribute("data-count"), at: [summary.style.left, summary.style.top] } : null;
+              })()
             };
           })()
         };

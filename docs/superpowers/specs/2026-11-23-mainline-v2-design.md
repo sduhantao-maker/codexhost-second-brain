@@ -84,7 +84,7 @@ interface State {
 | `summarize { threadId }`、`summarize.backfill`、`summarize.cancel` | 立即凝练一个对话；开始、停止整理旧对话（§9）。 |
 | `favorites.add`、`favorites.list { query, offset, limit }`、`favorites.get { id }`、`favorites.note`、`favorites.remove`、`favorites.reveal`、`favorites.revealed` | 收藏（§10）。`favorites.list` 分页（默认 100 条、最多 300 条），每条只给前 600 字（`truncated`），另给 `matched` 和 `nextOffset`；`favorites.get` 给一条的全文（§12）。 |
 | `reportTree` | Desktop 委派树；Web 也用它上报侧栏行上的父子关系。 |
-| `refs.list`、`refs.seen`、`integration.*`、`diagnose` | 同 v1。`refs.list` 从最新的开始放到答复上限，放不下的个数在 `omitted`。`integration.status` 和 `integration.preview` 在不可用时另给 `problem`（`NOT_SET_UP`、`NOT_A_FOLDER`、`FOLDER_UNREADABLE`、`FILE_UNREADABLE`、`NOT_JSON`、`NOT_AN_OBJECT`）和 `cause`（系统错误码），总览页按它用页面的语言说明。`refs.forThread`、`refs.search`、`refs.status` 还在，但现在没有界面调用。 |
+| `refs.list`、`refs.seen`、`refs.seenForThread`、`integration.*`、`diagnose` | 同 v1；`refs.seenForThread { threadId }`（0.10.3）把来源是这个对话的新动态都标为已看，见 §14。`refs.list` 从最新的开始放到答复上限，放不下的个数在 `omitted`。`integration.status` 和 `integration.preview` 在不可用时另给 `problem`（`NOT_SET_UP`、`NOT_A_FOLDER`、`FOLDER_UNREADABLE`、`FILE_UNREADABLE`、`NOT_JSON`、`NOT_AN_OBJECT`）和 `cause`（系统错误码），总览页按它用页面的语言说明。`refs.forThread`、`refs.search`、`refs.status` 还在，但现在没有界面调用。 |
 
 - **快照的大小**：完整状态超过 1 MiB 时，一部分对话只发提纲，`outline` 给出它们已达成和总共的里程碑数；连提纲都放不下时省掉最旧的条目，`omitted` 给出个数。读快照里的状态一律经过 `normalizeStateV2`（提纲没有标签、引申问题和任务）。
 - **凝练状态**（`SummarizerStatus`）：`backfill.full` 是因主线已满而不发送的没有主线的对话数；`lastErrorCode` 是最近一次失败的错误码，或 `CLAUDE_MISSING`、`CODEX_MISSING`、`MODEL_CALLS_OFF`。
@@ -201,3 +201,12 @@ interface State {
 - **已知限制**：悬停卡片只能用鼠标，没有键盘操作，也不支持触屏；这次不做，写进 §11 和 README。
 - **许可**：LGPL-3.0-only 不变；LGPL-3.0 是 GPL-3.0 的附加许可，须随附其全文：仓库加上 `COPYING.txt`（gnu.org 的 GPL-3.0 原文，未改动），打包时与 `LICENSE` 一起放进 `dist/second-brain.zip`。文件名用 `COPYING.txt` 而不是常见的 `COPYING`：codexhost 0.25.1 只收后缀已知（`.js`、`.md`、`.txt` 等）或名叫 LICENSE、NOTICE 等的文件，包里有一个不收的文件就整个拒装（只报「Host extension operation failed」），而 codexhost 也会直接装仓库（GitHub 上某个分支的源码包，插件索引在发布没有 zip 时也这样取），所以仓库里的每个文件也都得是它收的（因此也没有 `.d.mts` 类型声明文件，`scripts/package.mjs` 用 JSDoc 写类型）。`scripts/package.mjs` 决定包里放什么，`test/package.test.ts` 按 codexhost 的原样规则（文件名、各类文件的大小、路径、总数和总大小）检查打出来的包和 git 跟踪的全部文件。
 - **版本与发布**：0.10.0 是新名字下的第一个版本，`CHANGELOG.md` 记下它。发布走 GitHub Release（用户在 codexhost 的「导入插件 → 本地 .zip」安装），另向 codexhost 插件索引提问：索引的静态检查拒绝任何含 `child_process` 的包，而凝练要启动 `claude`/`codex`、回复提醒要启动 `gh`。公开仓库从一个干净的初始提交开始，完整历史只留在本机。
+
+## 14. PR 新动态的 🔔（0.10.3）
+
+用户在一个 🔔 没被看到的事故之后做的决定，0.10.3 实现：
+
+- **只在用户处理时消失**：快照里对话的切换不再把它的新动态标为已看（原来打开提出 PR 的对话就算看过，可主线胶囊默认关闭，打开对话时什么都看不到）。🔔 只在这几种情况下消失，是否显示着按点击所在的窗口判断：🔔（或悬停卡片最上面的新动态）显示着时点这个对话的侧栏行（`pointerdown` 时记下当时是否显示，`click` 时才算；Enter 也算，同一次只算一回；点行里自己的小按钮如置顶、归档不算），后台 `refs.seenForThread { threadId }` 把来源（`origin`）是这个对话的新动态都标为已看；卡片里的「知道了」和下面列表里的「打开对话」「知道了」用 `refs.seen { key }`；总览页「PR 与 Issue」页签的「跳转」照旧。🔔 不再自己消失，未看的新动态会积起来，所以快照带的未看新动态从最新 10 条放宽到 50 条，免得多出来的没人处理就丢了 🔔。
+- **按窗口记焦点**：每个窗口或页面启动时生成一个随机 id，随快照发送（`SnapshotParams.client`），后台按它分别记各自打开的对话；两个 Web 页面停在不同对话上，轮流轮询不再算切换。维护的优先级和真正切换时的 `maintainSoon()` 不变；一分钟没轮询的窗口忘掉，最多记 64 个。没有 id 的旧界面仍按界面种类记。
+- **看不到行时的汇总**：对话在侧栏里没有看得见的行（行没有大小、祖先 `display: none`、被收起的分组或滚动的列表裁掉，或根本没列出）时，它的新动态算进侧栏顶部的「🔔 N」：插件自己 overlay 里的一个真按钮（`aria-label`「N 条 PR 与 Issue 新动态」），点开一个列表，每条写仓库和编号、标题、发生了什么、什么时候、来自哪个对话，可以「打开对话」（先标为已看，最多等 1 秒，再打开）或「知道了」。看得见的行照旧挂自己的 🔔。位置在侧栏顶部的一条横线上，先找和宿主的东西（标题、按钮）同一水平的线，再从上往下、再往侧栏上方找；不盖宿主的文字、图标、小按钮和输入框，尽量也不盖整行宽的行、按钮和会滚动的列表；Desktop 避开左上角 macOS 的窗口按钮。codexhost 的 Desktop 和 Web 扩展接口都没有打开插件页面的方法（Desktop 只有 `navigate.openThread`），所以用列表，不跳到总览页。
+- **GitHub 轮询**：在用时每分钟一次（原来 3 分钟），否则 10 分钟。「在用」是 10 分钟内有界面调用过后台；每个开着且没隐藏的 Desktop 窗口和 Web 页面每 2 秒（总览页每 3 秒）要一次快照，所以只要有一个开着就一直算在用。这个定义不变，README 照实写明。闲下来以后再有调用时，不提前已经排好的那一轮（最多 10 分钟）。

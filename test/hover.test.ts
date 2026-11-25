@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationView, MilestoneView } from "../src/core/conversation-view.js";
+import type { RefView } from "../src/core/refs.js";
 import type { ControllerHandle, LiveData, SurfaceAdapter } from "../src/ui/controller.js";
 import { HIDE_DELAY_MS, HOST_ATTRIBUTE, PREFETCH_DELAY_MS, REBIND_MS, SHOW_DELAY_MS, startHover } from "../src/ui/hover/index.js";
-import { badgeSpot, cardSpot, type Box } from "../src/ui/hover/layout.js";
+import { badgeSpot, cardSpot, hostContent, inSight, newsBadgeSpot, summarySpot, type Box } from "../src/ui/hover/layout.js";
 import { NOW, T, ref42, sampleSnapshot, sampleView } from "./fixtures/v2.js";
 
 // ---------------------------------------------------------------------------------------------
@@ -95,7 +96,7 @@ function setup() {
       chunks.push(params as (typeof chunks)[number]);
       return { received: 1, done: true };
     }
-    if (method === "refs.seen" || method === "summarize") return { ok: true };
+    if (method === "refs.seen" || method === "refs.seenForThread" || method === "summarize") return { ok: true };
     if (method !== "conversation") throw new Error(`unexpected method ${method}`);
     const { threadId } = params as { threadId: string };
     if (failing.has(threadId)) throw new Error("[INTERNAL] backend exploded\n    at somewhere (backend.mjs:1:1)");
@@ -439,6 +440,44 @@ describe("sidebar hover card", () => {
       await wait(HIDE_DELAY_MS * 2);
       expect(cardShown()).toBe(true);
       expect(card()!.style.top).toBe(`${ROW_TOP + 57 + 8}px`);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("goes under the preview of Codex Desktop 26.1120, drawn by a fixed child of an empty popover", async () => {
+    // Since 26.1120 the preview is an empty `popover="hint"` element; a fixed-position child placed
+    // beside the row with CSS anchor positioning is what shows (and what covered the card).
+    const preview = document.createElement("div");
+    preview.setAttribute("popover", "hint");
+    preview.setAttribute("role", "dialog");
+    box(preview, { left: 0, top: 0, width: 0, height: 0 });
+    const drawn = document.createElement("div");
+    drawn.setAttribute("data-placement", "inline-end-start");
+    drawn.style.position = "fixed";
+    box(drawn, { left: SIDEBAR_WIDTH - 2, top: ROW_TOP, width: 320, height: 59 });
+    preview.append(drawn);
+    env.sidebar.append(preview);
+    let open = false;
+    const query = document.querySelectorAll.bind(document);
+    // jsdom has no Popover API; stand in for :popover-open.
+    const spy = vi
+      .spyOn(document, "querySelectorAll")
+      .mockImplementation(((selector: string) => (selector === ":popover-open" ? (open ? [preview] : []) : query(selector))) as typeof document.querySelectorAll);
+    try {
+      move(null, env.titleOf(T.main));
+      await wait(SHOW_DELAY_MS);
+      expect(cardShown()).toBe(true);
+      // The card shows first; the preview opens after it, and the card makes room under it.
+      open = true;
+      preview.dispatchEvent(new Event("toggle"));
+      await wait(0);
+      expect([card()!.style.left, card()!.style.top]).toEqual([`${SIDEBAR_WIDTH - 2}px`, `${ROW_TOP + 59 + 8}px`]);
+      expect(card()!.getAttribute("data-beside")).toBe("popover");
+      // Crossing the drawn preview on the way to the card keeps the card.
+      move(env.titleOf(T.main), drawn);
+      await wait(HIDE_DELAY_MS * 2);
+      expect(cardShown()).toBe(true);
     } finally {
       spy.mockRestore();
     }
@@ -800,6 +839,71 @@ describe("sidebar hover card", () => {
     expect(marker()).toBeNull();
   });
 
+  it("leaves the bell until the user acts on it: a click on the row while the bell shows, not on another row or the row's own buttons", async () => {
+    const marker = () => host()?.shadowRoot?.querySelector<HTMLElement>(`.news-marker[data-thread="${T.main}"]`) ?? null;
+    const seen = () => env.invoke.mock.calls.filter(([method]) => method === "refs.seenForThread").map(([, params]) => params);
+    const click = (element: Element) => {
+      pointer(element, "pointerdown", null);
+      (element as HTMLElement).click();
+    };
+    env.publish("v-news", { alerts: [ref42] });
+    await wait(0);
+    expect(marker()?.hidden).toBe(false);
+    // Opening another conversation from its row.
+    move(null, env.titleOf(T.child));
+    click(env.titleOf(T.child));
+    await wait(10);
+    // The row's own pin button: it does not open the conversation.
+    const pin = env.rows[T.main]!.querySelector(".pin")!;
+    move(env.titleOf(T.child), pin);
+    expect(marker()!.hidden).toBe(true);
+    click(pin);
+    await wait(10);
+    expect(seen()).toEqual([]);
+    expect(marker()!.hidden).toBe(true);
+    // The row itself: its bell was in sight as the pointer came onto the row (it hides while the row is hovered).
+    move(pin, env.titleOf(T.main));
+    click(env.titleOf(T.main));
+    await wait(10);
+    expect(seen()).toEqual([{ threadId: T.main }]);
+    expect(env.refresh).toHaveBeenCalled();
+  });
+
+  it("counts a click on the row while its card shows the news, though no bell was in sight", async () => {
+    const seen = () => env.invoke.mock.calls.filter(([method]) => method === "refs.seenForThread").map(([, params]) => params);
+    // No news in the snapshot yet, so no bell: the card has it from the conversation's view.
+    move(null, env.titleOf(T.old));
+    await wait(SHOW_DELAY_MS);
+    expect(card()!.querySelector('[data-section="news"]')).toBeNull();
+    pointer(env.titleOf(T.old), "pointerdown", null);
+    (env.titleOf(T.old) as HTMLElement).click();
+    await wait(10);
+    expect(seen()).toEqual([]);
+    move(env.titleOf(T.old), env.titleOf(T.main));
+    await wait(SHOW_DELAY_MS);
+    expect(card()!.querySelector('[data-section="news"]')).not.toBeNull();
+    // A press hides the card at once; what it showed then counts for the click.
+    pointer(env.titleOf(T.main), "pointerdown", null);
+    expect(cardShown()).toBe(false);
+    (env.titleOf(T.main) as HTMLElement).click();
+    await wait(10);
+    expect(seen()).toEqual([{ threadId: T.main }]);
+  });
+
+  it("counts Enter on a row whose bell is in sight once, with the click it may bring", async () => {
+    const seen = () => env.invoke.mock.calls.filter(([method]) => method === "refs.seenForThread").map(([, params]) => params);
+    const row = env.rows[T.main]!;
+    env.rows[T.child]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(10);
+    expect(seen()).toEqual([]);
+    env.publish("v-news", { alerts: [ref42] });
+    await wait(0);
+    row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    row.click();
+    await wait(10);
+    expect(seen()).toEqual([{ threadId: T.main }]);
+  });
+
   it("hides when the pointer moves onto sidebar space that is no conversation", async () => {
     move(null, env.titleOf(T.main));
     await wait(SHOW_DELAY_MS);
@@ -1003,6 +1107,146 @@ describe("milestone badge on the row", () => {
   });
 });
 
+describe("news whose conversation has no row in sight", () => {
+  const NOT_LISTED = "55555555-eeee-4eee-8eee-555555555555";
+  const ref7: RefView = { ...ref42, key: "acme/widgets#7", number: 7, title: "登录按钮错位", origin: { threadId: T.old, title: "登录页样式检查", turn: 2 } };
+  const ref9: RefView = { ...ref42, key: "acme/widgets#9", number: 9, title: "菜单在窄屏下重叠", origin: { threadId: NOT_LISTED, title: "菜单重叠", turn: 1 }, activity: { at: NOW - 3 * 60_000, reason: "merged", unseen: true } };
+  const summary = () => host()?.shadowRoot?.querySelector<HTMLButtonElement>(".summary") ?? null;
+  const shownSummary = () => (summary() && !summary()!.hidden ? summary() : null);
+  const list = () => host()?.shadowRoot?.querySelector<HTMLElement>(".news-list") ?? null;
+  const marker = (threadId: string) => host()?.shadowRoot?.querySelector<HTMLElement>(`.news-marker[data-thread="${threadId}"]:not([hidden])`) ?? null;
+  const boxOfSummary = () => {
+    const left = parseFloat(summary()!.style.left);
+    const top = parseFloat(summary()!.style.top);
+    return { left, top, right: left + 44, bottom: top + 20 };
+  };
+
+  it("counts it in one 🔔 N button at the top of the sidebar: a row folded away, of no size, scrolled away, or none", async () => {
+    // Every conversation with news has a row in sight: bells on the rows, no summary.
+    env.publish("v1", { alerts: [ref42, ref7] });
+    await wait(0);
+    expect(marker(T.main)).not.toBeNull();
+    expect(marker(T.old)).not.toBeNull();
+    expect(shownSummary()).toBeNull();
+    // Its row in a collapsed group (display: none), and one not listed at all.
+    const group = document.createElement("div");
+    group.style.display = "none";
+    env.sidebar.append(group);
+    group.append(env.rows[T.old]!);
+    env.publish("v2", { alerts: [ref42, ref7, ref9] });
+    await wait(0);
+    expect(shownSummary()?.tagName).toBe("BUTTON");
+    expect(summary()!.getAttribute("type")).toBe("button");
+    expect(summary()!.getAttribute("aria-label")).toBe("2 条 PR 与 Issue 新动态");
+    expect(summary()!.textContent).toBe("🔔2");
+    expect(marker(T.old)).toBeNull();
+    // A row in sight keeps its own bell and is not counted.
+    expect(marker(T.main)).not.toBeNull();
+    // At the top of the sidebar, clear of its first section's title and its rows.
+    const spot = boxOfSummary();
+    expect(spot.top).toBeLessThan(60);
+    expect(spot.left).toBeGreaterThanOrEqual(0);
+    expect(spot.right).toBeLessThanOrEqual(SIDEBAR_WIDTH);
+    // The group unfolds, but the row has no size yet; then it is scrolled away below the sidebar.
+    env.sidebar.append(env.rows[T.old]!);
+    box(env.rows[T.old]!, { left: 0, top: 0, width: 0, height: 0 });
+    await wait(REBIND_MS);
+    expect(summary()!.getAttribute("data-count")).toBe("2");
+    box(env.rows[T.old]!, { left: 0, top: 900, width: SIDEBAR_WIDTH, height: ROW_HEIGHT });
+    await wait(REBIND_MS);
+    expect(summary()!.getAttribute("data-count")).toBe("2");
+    // In sight again: its bell is back on its row, and the summary counts one.
+    box(env.rows[T.old]!, { left: 0, top: ROW_TOP + 2 * ROW_HEIGHT, width: SIDEBAR_WIDTH, height: ROW_HEIGHT });
+    await wait(REBIND_MS);
+    expect(marker(T.old)).not.toBeNull();
+    expect(summary()!.getAttribute("aria-label")).toBe("1 条 PR 与 Issue 新动态");
+    // Seen: gone.
+    env.publish("v3", { alerts: [ref42] });
+    await wait(0);
+    expect(shownSummary()).toBeNull();
+    document.documentElement.lang = "en";
+    env.publish("v4", { alerts: [ref9] });
+    await wait(0);
+    expect(summary()!.getAttribute("aria-label")).toBe("1 new on your PRs and issues");
+  });
+
+  it("goes where it covers none of the host's text or buttons", async () => {
+    // The host's own header at the top of the sidebar: its name on the left, two buttons on the right.
+    const header = document.createElement("div");
+    box(header, { left: 0, top: 0, width: SIDEBAR_WIDTH, height: 40 });
+    const name = document.createElement("span");
+    name.textContent = "Threads";
+    box(name, { left: 12, top: 10, width: 50, height: 20 });
+    const buttons = [200, 228].map((left) => {
+      const button = document.createElement("button");
+      button.setAttribute("aria-label", "New");
+      box(button, { left, top: 8, width: 24, height: 24 });
+      return button;
+    });
+    header.append(name, ...buttons);
+    env.sidebar.prepend(header);
+    env.publish("v1", { alerts: [ref9] });
+    await wait(0);
+    const spot = boxOfSummary();
+    const clear = (other: { left: number; top: number; width: number; height: number }) =>
+      spot.right <= other.left || spot.left >= other.left + other.width || spot.bottom <= other.top || spot.top >= other.top + other.height;
+    expect(clear({ left: 12, top: 10, width: 50, height: 20 })).toBe(true);
+    expect(clear({ left: 200, top: 8, width: 24, height: 24 })).toBe(true);
+    expect(clear({ left: 228, top: 8, width: 24, height: 24 })).toBe(true);
+    // In the header's free middle, level with its name and buttons, as far right as it goes.
+    expect(spot).toEqual({ left: 153, top: 10, right: 197, bottom: 30 });
+    // Nothing of the host was touched.
+    expect(header.children).toHaveLength(3);
+  });
+
+  it("lists that news: what happened, where it came from; open the conversation (seen first) or Got it", async () => {
+    env.publish("v1", { alerts: [ref42, ref9] });
+    await wait(0);
+    expect(summary()!.getAttribute("aria-expanded")).toBe("false");
+    summary()!.click();
+    expect(list()!.hidden).toBe(false);
+    expect(summary()!.getAttribute("aria-expanded")).toBe("true");
+    expect(list()!.getAttribute("role")).toBe("dialog");
+    expect(list()!.getAttribute("aria-label")).toBe("PR 与 Issue 新动态");
+    const items = list()!.querySelectorAll(".news-item");
+    expect(items).toHaveLength(1);
+    expect(text(items[0], ".ref-number")).toBe("acme/widgets#9");
+    expect(text(items[0], ".ref-title")).toBe("菜单在窄屏下重叠");
+    expect(texts(items[0], ".news-item-meta")).toEqual(["已合并 · 3 分钟前", "来自对话「菜单重叠」第 1 轮"]);
+    expect(texts(items[0], "button")).toEqual(["打开对话", "知道了"]);
+    // The focus goes into the list; Escape closes it and brings the focus back.
+    expect(host()!.shadowRoot!.activeElement?.textContent).toBe("打开对话");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(list()!.hidden).toBe(true);
+    expect(host()!.shadowRoot!.activeElement).toBe(summary());
+    // A press elsewhere closes it too.
+    summary()!.click();
+    pointer(env.content, "pointerdown", null);
+    expect(list()!.hidden).toBe(true);
+    // Got it: that news is seen.
+    summary()!.click();
+    [...list()!.querySelectorAll("button")].find((button) => button.textContent === "知道了")!.click();
+    await wait(10);
+    expect(env.invoke).toHaveBeenCalledWith("refs.seen", { key: "acme/widgets#9" });
+    expect(env.refresh).toHaveBeenCalled();
+    // Open the conversation: its news is marked seen first (opening may load another page), then it opens.
+    const order: string[] = [];
+    env.invoke.mockImplementationOnce(async (method, params) => {
+      order.push(`${method} ${(params as { key: string }).key}`);
+      return { ok: true };
+    });
+    env.openThread.mockImplementationOnce((threadId: string) => void order.push(`open ${threadId}`));
+    [...list()!.querySelectorAll("button")].find((button) => button.textContent === "打开对话")!.click();
+    expect(list()!.hidden).toBe(true);
+    await wait(10);
+    expect(order).toEqual(["refs.seen acme/widgets#9", `open ${NOT_LISTED}`]);
+    // Once seen, the summary goes.
+    env.publish("v2", { alerts: [ref42] });
+    await wait(0);
+    expect(shownSummary()).toBeNull();
+  });
+});
+
 describe("hover layout", () => {
   const rect = (left: number, top: number, width: number, height: number): Box => ({
     left,
@@ -1060,5 +1304,111 @@ describe("hover layout", () => {
     const sidebar = document.createElement("nav");
     box(sidebar, { left: 0, top: 200, width: 260, height: 400 });
     expect(badgeSpot(row, sidebar)).toBeNull();
+  });
+
+  it("puts no bell on a row folded into a group of no height, or in one not shown", () => {
+    const sidebar = document.createElement("nav");
+    box(sidebar, { left: 0, top: 0, width: 260, height: 800 });
+    const group = document.createElement("div");
+    const row = document.createElement("div");
+    box(row, { left: 0, top: 100, width: 260, height: 32 });
+    group.append(row);
+    sidebar.append(group);
+    document.body.append(sidebar);
+    expect(newsBadgeSpot(row, sidebar)).not.toBeNull();
+    // Folded: the group clips its rows to no height.
+    group.style.overflow = "hidden";
+    box(group, { left: 0, top: 100, width: 260, height: 0 });
+    expect(inSight(row, sidebar)).toBeNull();
+    expect(newsBadgeSpot(row, sidebar)).toBeNull();
+    // Hidden: display none somewhere above it.
+    group.style.overflow = "";
+    group.style.display = "none";
+    expect(newsBadgeSpot(row, sidebar)).toBeNull();
+  });
+
+  it("puts the summary on the first free line at the top of the sidebar, as far right as it goes", () => {
+    const sidebar = rect(0, 50, 260, 750);
+    const viewport = { width: 1200, height: 800 };
+    const summary = { width: 44, height: 20 };
+    const none = { hard: [], buttons: [], rows: [], scrolling: [] };
+    expect(summarySpot(sidebar, summary, viewport, none)).toEqual({ left: 210, top: 56, over: false });
+    // A title and two buttons on the first line: between them, level with them.
+    const hard = [rect(12, 60, 50, 20), rect(200, 58, 24, 24), rect(228, 58, 24, 24)];
+    expect(summarySpot(sidebar, summary, viewport, { ...none, hard })).toEqual({ left: 153, top: 60, over: false });
+    // The first lines full of text: the first line below them, 3 pixels clear.
+    const full = [rect(6, 50, 250, 40)];
+    expect(summarySpot(sidebar, summary, viewport, { ...none, hard: full })).toEqual({ left: 210, top: 94, over: false });
+  });
+
+  it("keeps the summary off rows, buttons as wide as a row and lists that scroll, unless there is no other room", () => {
+    const viewport = { width: 1200, height: 800 };
+    const summary = { width: 44, height: 20 };
+    // Codex Desktop: the sidebar is the list that scrolls, its rows from its top; above it the
+    // window's title bar, empty but for the window's own buttons on its left.
+    const sidebar = rect(0, 96, 260, 700);
+    const rows = Array.from({ length: 10 }, (_, i) => rect(6, 96 + i * 32, 248, 30));
+    const newChat = rect(6, 52, 248, 36);
+    const content = { hard: [], buttons: [newChat], rows, scrolling: [rect(0, 96, 260, 700)] };
+    // Above the list and its "New chat" bar, level with the window's buttons and clear of them.
+    const top = summarySpot(sidebar, summary, viewport, content, [rect(0, 0, 84, 44)]);
+    expect(top).toEqual({ left: 210, top: 12, over: false });
+    // No room above: over the list (it moves along when the list scrolls), never on the window's buttons.
+    const tight = summarySpot(rect(0, 30, 260, 700), summary, viewport, { ...content, buttons: [], rows: [], scrolling: [rect(0, 30, 260, 700)] }, [rect(0, 0, 84, 44)]);
+    expect(tight).toEqual({ left: 210, top: 36, over: true });
+    // Rows everywhere and nowhere else to go: on the empty end of a row.
+    const crowded = summarySpot(rect(0, 8, 260, 700), summary, viewport, { hard: Array.from({ length: 10 }, (_, i) => rect(40, 8 + i * 32, 120, 30)), buttons: [], rows: Array.from({ length: 10 }, (_, i) => rect(6, 8 + i * 32, 248, 30)), scrolling: [] });
+    expect(crowded).toEqual({ left: 210, top: 13, over: false });
+    // A narrow sidebar on Desktop: never over the window's close, minimize and zoom buttons.
+    const narrow = summarySpot(rect(0, 0, 120, 700), summary, viewport, { hard: [], buttons: [], rows: [], scrolling: [] }, [rect(0, 0, 84, 44)]);
+    expect(narrow.top).toBeGreaterThanOrEqual(44 + 3);
+  });
+
+  it("tells the host's text, icons, small controls and fields from wide rows and buttons, and leaves out what is not on screen", () => {
+    env.stop();
+    document.body.replaceChildren();
+    const root = document.createElement("div");
+    box(root, { left: 0, top: 0, width: 260, height: 800 });
+    const title = document.createElement("div");
+    title.textContent = "Threads";
+    box(title, { left: 0, top: 10, width: 260, height: 20 });
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    box(icon, { left: 8, top: 40, width: 16, height: 16 });
+    const small = document.createElement("button");
+    box(small, { left: 230, top: 40, width: 20, height: 20 });
+    const wide = document.createElement("button");
+    box(wide, { left: 6, top: 70, width: 248, height: 30 });
+    const field = document.createElement("input");
+    box(field, { left: 6, top: 104, width: 248, height: 28 });
+    const row = document.createElement("div");
+    row.setAttribute("role", "treeitem");
+    box(row, { left: 6, top: 140, width: 248, height: 30 });
+    const hidden = document.createElement("div");
+    hidden.style.display = "none";
+    const inside = document.createElement("button");
+    box(inside, { left: 6, top: 10, width: 20, height: 20 });
+    hidden.append(inside);
+    // A list scrolled so that its first row is above its top edge: that row is not on screen.
+    const list = document.createElement("div");
+    list.style.overflow = "auto";
+    box(list, { left: 0, top: 180, width: 260, height: 100 });
+    const away = document.createElement("button");
+    box(away, { left: 6, top: 150, width: 20, height: 20 });
+    list.append(away);
+    const ours = document.createElement("div");
+    ours.setAttribute("data-ours", "");
+    box(ours, { left: 0, top: 0, width: 260, height: 800 });
+    root.append(title, icon, small, wide, field, row, hidden, list, ours);
+    document.body.append(root);
+    const area = rect(0, 0, 260, 300);
+    const content = hostContent(document, area, (element) => element.hasAttribute("data-ours"));
+    expect(content.hard).toEqual([rect(0, 10, 260, 20), rect(8, 40, 16, 16), rect(230, 40, 20, 20), rect(6, 104, 248, 28)]);
+    expect(content.buttons).toEqual([rect(6, 70, 248, 30)]);
+    expect(content.rows).toEqual([rect(6, 140, 248, 30)]);
+    // The conversation rows the surface knows count as rows, whatever they are made of.
+    const plain = document.createElement("div");
+    box(plain, { left: 6, top: 220, width: 248, height: 30 });
+    list.append(plain);
+    expect(hostContent(document, area, () => false, (element) => element === plain).rows).toContainEqual(rect(6, 220, 248, 30));
   });
 });

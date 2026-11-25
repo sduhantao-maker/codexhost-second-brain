@@ -51,8 +51,25 @@ export interface Demo {
   open: { threadId: string; title: string };
   /** The conversation a passage is selected in (saving a reply). */
   save: { threadId: string; title: string; user: string; reply: string[]; passage: string };
-  /** The mock host's words around the extension: its new-conversation button, composer, selection toolbar and the overview page's tab. */
-  host: { newChat: string; composer: string; addToChat: string; annotate: string; page: string };
+  /**
+   * The mock host's words around the extension: its new-conversation button, composer, selection
+   * toolbar and the overview page's tab; and, for the summary of news, the sidebar's sections and
+   * the labels of its small buttons.
+   */
+  host: {
+    newChat: string;
+    composer: string;
+    addToChat: string;
+    annotate: string;
+    page: string;
+    recent: string;
+    workspaces: string;
+    threads: string;
+    search: string;
+    hideSidebar: string;
+    filter: string;
+    newProject: string;
+  };
 }
 
 /** The words of one language. */
@@ -78,7 +95,20 @@ interface Words {
 }
 
 const ZH: Words = {
-  host: { newChat: "新对话", composer: "继续对话…", addToChat: "添加到对话", annotate: "添加批注", page: "第二大脑" },
+  host: {
+    newChat: "新对话",
+    composer: "继续对话…",
+    addToChat: "添加到对话",
+    annotate: "添加批注",
+    page: "第二大脑",
+    recent: "最近",
+    workspaces: "工作区",
+    threads: "对话",
+    search: "搜索",
+    hideSidebar: "收起侧栏",
+    filter: "筛选",
+    newProject: "新建项目",
+  },
   sidebar: {
     login: "登录页在手机上错位",
     ipad: "检查 iPad 横屏",
@@ -162,7 +192,20 @@ const ZH: Words = {
 };
 
 const EN: Words = {
-  host: { newChat: "New chat", composer: "Reply…", addToChat: "Add to chat", annotate: "Add comment", page: "Second Brain" },
+  host: {
+    newChat: "New chat",
+    composer: "Reply…",
+    addToChat: "Add to chat",
+    annotate: "Add comment",
+    page: "Second Brain",
+    recent: "Recent",
+    workspaces: "Workspaces",
+    threads: "Threads",
+    search: "Search",
+    hideSidebar: "Hide sidebar",
+    filter: "Filter",
+    newProject: "New project",
+  },
   sidebar: {
     login: "Login bug on phones",
     ipad: "Check iPad landscape",
