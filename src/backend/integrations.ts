@@ -126,11 +126,14 @@ async function linkTarget(file: string): Promise<string> {
  */
 async function atomicWrite(file: string, text: string): Promise<void> {
   const target = await linkTarget(file);
-  const mode = await stat(target).then((info) => info.mode & 0o777, () => 0o644);
+  const existing = await stat(target).then((info) => info.mode & 0o777, () => undefined);
   await mkdir(path.dirname(target), { recursive: true });
   const temporary = `${target}.mainline-${process.pid}.tmp`;
   try {
-    await writeFile(temporary, text, { mode });
+    await writeFile(temporary, text, { mode: existing ?? 0o644 });
+    // writeFile's mode is masked by the umask (077 turns 0o640 into 0o600): give an existing file
+    // its own mode back exactly. A new file keeps what the umask allows.
+    if (existing !== undefined) await chmod(temporary, existing);
     await rename(temporary, target);
   } catch (error) {
     await rm(temporary, { force: true });

@@ -33,7 +33,9 @@ describe("linked configuration files", () => {
     const agents = path.join(dotfiles, "AGENTS.md");
     const settings = path.join(dotfiles, "claude-settings.json");
     await writeFile(agents, "# my shared rules\n");
-    await writeFile(settings, '{\n  "model": "opus"\n}\n', { mode: 0o640 });
+    await writeFile(settings, '{\n  "model": "opus"\n}\n');
+    // Set after writing: a mode given to writeFile is masked by the umask (077 leaves 0o600).
+    await chmod(settings, 0o640);
     await symlink(agents, path.join(home, ".codex", "AGENTS.md"));
     // A relative link, as dotfile managers often make them.
     await symlink(path.relative(path.join(home, ".claude"), settings), path.join(home, ".claude", "settings.json"));
@@ -91,6 +93,25 @@ describe("linked configuration files", () => {
       expect(await readFile(agents, "utf8")).toBe("# read only\n");
     } finally {
       await chmod(lockedDir, 0o700);
+    }
+  });
+});
+
+describe("file modes", () => {
+  it("keep an existing file's mode under a strict umask, while a new file follows the umask", async () => {
+    const previous = process.umask(0o077);
+    try {
+      const settings = path.join(home, ".claude", "settings.json");
+      await writeFile(settings, "{}\n");
+      await chmod(settings, 0o644);
+      const integrations = integrationsFor();
+      await integrations.install("claude");
+      await integrations.install("codex");
+      expect((await lstat(settings)).mode & 0o777).toBe(0o644);
+      // ~/.codex/AGENTS.md did not exist: it gets what the umask allows.
+      expect((await lstat(path.join(home, ".codex", "AGENTS.md"))).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(previous);
     }
   });
 });

@@ -2,11 +2,15 @@
 
 <h1 align="center">Second Brain · 第二大脑</h1>
 
+<p align="center"><b>有限的注意力，迅速收回。</b><br><b>Your attention is limited; get it back fast.</b></p>
+
 <p align="center">
   A <a href="https://github.com/BytePioneer-AI/codex-host">codexhost</a> extension that remembers what each conversation is doing, how far it got, and which replies are worth keeping. Every conversation gets a visible mainline: what it is doing, the milestones it has reached and the task at hand. Rest the pointer on a conversation in the sidebar to see it, or turn on a capsule in the conversation header.
 </p>
 
 <p align="center"><a href="#english">English</a> · <a href="#中文">中文</a></p>
+
+<p align="center">⭐ 如果这个项目对你有帮助，请给它一个 Star！⭐<br>⭐ If Second Brain is useful to you, please give it a star! ⭐</p>
 
 ## 中文
 
@@ -52,7 +56,7 @@
 
 ### 安装
 
-需要支持统一 Host 扩展（`manifestVersion: 2`）的 codexhost，也就是 0.24.0 及以上。在 macOS 上用 codexhost 0.25.1 测试过，Windows 和 Linux 未经验证。
+需要支持统一 Host 扩展（`manifestVersion: 2`）的 codexhost，也就是 0.24.0 及以上。在 macOS 上用 codexhost 0.25.1 和 0.26.0 测试过，Windows 和 Linux 未经验证。
 
 - **本地 .zip**：从 [Releases](../../releases) 下载 `second-brain.zip`（也可以运行 `npm ci && npm run package` 自己打包，得到 `dist/second-brain.zip`），在「插件 → 导入插件 → 本地 .zip」选择它，然后启用。
 - 用过开发中的旧版「主线任务」的，见下面的「从开发中的旧版「主线任务」升级」。
@@ -122,7 +126,7 @@ Agent 使用的命令装在 `~/.codexhost/host-extension-data/second-brain/bin/m
 
 1. 先在「第二大脑 → 设置 → Agent 协作」里，对 Claude Code 和 Codex 各点「卸载」，再点「确认修改」。卸载插件本身不会改 `~/.claude/settings.json` 和 `~/.codex/AGENTS.md`，不先卸载的话，那条 hook 和那段说明会留在里面。插件卸载或停用后，它们运行的 `mainline hook` 和 `mainline show` 什么都不说、什么都不记；`mainline` 的其他命令照常读写数据目录。
 2. 再在 codexhost 里卸载插件。
-3. codexhost（至少到 0.25.1）卸载插件时保留数据目录 `~/.codexhost/host-extension-data/second-brain/`：里面有主线和每个对话最近一条消息（`state.json`）、PR 索引和对话开头的请求（`refs.json`）、收藏、开子对话时附带的文件、Agent 协作改动前的配置备份（`backups/`，可能含登录凭据）、日志和 `mainline` 命令，完整列表见上面。不再需要时，可以手动删掉整个目录。
+3. codexhost（至少到 0.26.0）卸载插件时保留数据目录 `~/.codexhost/host-extension-data/second-brain/`：里面有主线和每个对话最近一条消息（`state.json`）、PR 索引和对话开头的请求（`refs.json`）、收藏、开子对话时附带的文件、Agent 协作改动前的配置备份（`backups/`，可能含登录凭据）、日志和 `mainline` 命令，完整列表见上面。不再需要时，可以手动删掉整个目录。
 
 ### 对 codexhost 的负载
 
@@ -133,6 +137,8 @@ Agent 使用的命令装在 `~/.codexhost/host-extension-data/second-brain/bin/m
 - 诊断默认关闭。需要时在 Desktop 或 Web 的开发者控制台里设置 `localStorage["codexhost-mainline:debug"] = "1"`。
 
 ### 报告问题
+
+发现问题或有改进想法，欢迎[提交 issue](https://github.com/sduhantao-maker/codexhost-second-brain/issues/new)，每一条我都会认真看，并尽快参考修改。附上下面的日志或诊断记录，能更快找到原因。安全问题请不要开公开的 issue，按 [SECURITY.md](SECURITY.md) 私下报告。
 
 - 后台日志是数据目录里的 `backend.log`（上一份是 `backend.log.1`）。它记后台做了什么：启动（插件版本、Node 版本和平台）、安装或卸载 Agent 协作、每次模型调用（模型、原因、对话短编号、耗时、成败）、GitHub 上有动静的 PR 和 issue（仓库和编号）、读不出的对话的短编号，以及出错原因。不含对话内容；主目录写作 `~`，路径里的用户名写作 `<user>`，但仓库名照写，贴出来之前先看一遍。
 - 胶囊、悬停卡片或「★ 收藏」的位置不对，或认不出当前对话时，打开诊断：在 Desktop 或 Web 的开发者控制台里运行 `localStorage["codexhost-mainline:debug"] = "1"`，再重现一次。这个界面会把它看到的页面结构（当前对话短编号、侧栏行数、标题栏和胶囊的位置等）写进 `backend.log`。运行 `localStorage.removeItem("codexhost-mainline:debug")` 关闭。
@@ -190,7 +196,7 @@ Works in Codex Desktop and in codexhost's own window and Web.
 
 ### Install
 
-Requires a codexhost with unified Host extensions (`manifestVersion: 2`), that is 0.24.0 or later. Tested on macOS with codexhost 0.25.1; Windows and Linux are untested. Download `second-brain.zip` from [Releases](../../releases) (or run `npm ci && npm run package` to build `dist/second-brain.zip`), then choose **Plugins → Import plugin → Local .zip** with it and turn it on. If you used the development version "Mainline", see **Upgrading from the development version "Mainline"** below. The sidebar delegation tree extension is optional; with it, child conversations are indented under their parent.
+Requires a codexhost with unified Host extensions (`manifestVersion: 2`), that is 0.24.0 or later. Tested on macOS with codexhost 0.25.1 and 0.26.0; Windows and Linux are untested. Download `second-brain.zip` from [Releases](../../releases) (or run `npm ci && npm run package` to build `dist/second-brain.zip`), then choose **Plugins → Import plugin → Local .zip** with it and turn it on. If you used the development version "Mainline", see **Upgrading from the development version "Mainline"** below. The sidebar delegation tree extension is optional; with it, child conversations are indented under their parent.
 
 ### Use
 
@@ -252,7 +258,7 @@ Files kept on this machine (the JSON files are written compactly):
 
 1. First, in **Second Brain → Settings → Agent integration**, select **Remove** for Claude Code and for Codex, then **Apply**. Uninstalling the extension does not touch `~/.claude/settings.json` or `~/.codex/AGENTS.md`: without this step the hook and the section stay there. Once the extension is uninstalled or turned off, the `mainline hook` and `mainline show` they run say and record nothing; the other `mainline` commands still read and write the data folder.
 2. Then uninstall the extension in codexhost.
-3. codexhost (up to 0.25.1 at least) keeps the data folder `~/.codexhost/host-extension-data/second-brain/` when it uninstalls the extension. It holds the mainlines and each conversation's latest message (`state.json`), the PR index with the first requests of conversations (`refs.json`), the saved passages, the files sent along with child conversations, the copies of your configuration made before the integration changed it (`backups/`, which can hold credentials), the log and the `mainline` command; the full list is above. Delete the folder by hand when you no longer need it.
+3. codexhost (up to 0.26.0 at least) keeps the data folder `~/.codexhost/host-extension-data/second-brain/` when it uninstalls the extension. It holds the mainlines and each conversation's latest message (`state.json`), the PR index with the first requests of conversations (`refs.json`), the saved passages, the files sent along with child conversations, the copies of your configuration made before the integration changed it (`backups/`, which can hold credentials), the log and the `mainline` command; the full list is above. Delete the folder by hand when you no longer need it.
 
 ### Load on codexhost
 
@@ -263,6 +269,8 @@ Files kept on this machine (the JSON files are written compactly):
 - Diagnostics are off. To turn them on, set `localStorage["codexhost-mainline:debug"] = "1"` in the developer console of Desktop or Web.
 
 ### Reporting a problem
+
+Found a bug or have an idea? [Open an issue](https://github.com/sduhantao-maker/codexhost-second-brain/issues/new). I read every one and act on it as soon as I can. The log and the diagnostics below help find the cause faster. Please report security problems privately as described in [SECURITY.md](SECURITY.md), not in a public issue.
 
 - The backend's log is `backend.log` in the data folder (the one before is `backend.log.1`). It records what the backend did: starting (with the extension's version, Node's version and the platform), installing or removing the integration, each model call (model, reason, short conversation id, time taken and outcome), the PRs and issues with GitHub activity (repository and number), the short ids of conversations it could not read, and why something failed. It holds no conversation text; your home folder is written as `~` and your user name in a path as `<user>`, but repository names are written as they are, so read it through before you post it.
 - When the capsule, the hover card or the **★ Save** button sits in the wrong place, or the open conversation is not recognized, turn diagnostics on: run `localStorage["codexhost-mainline:debug"] = "1"` in the developer console of Desktop or Web, then make it happen again. That surface then writes what it sees of the page (the open conversation's short id, how many sidebar rows, where the header and the capsule are, and the like) to `backend.log`. Run `localStorage.removeItem("codexhost-mainline:debug")` to turn it off.

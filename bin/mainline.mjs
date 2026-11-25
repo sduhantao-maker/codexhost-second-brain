@@ -2177,7 +2177,7 @@ function commandPath(dataDir, platform = process.platform) {
 }
 
 // src/cli/main.ts
-var VERSION2 = true ? "0.10.1" : "dev";
+var VERSION2 = true ? "0.10.2" : "dev";
 var VALUE_FLAGS = {
   "--thread": "thread",
   "--data-dir": "dataDir",

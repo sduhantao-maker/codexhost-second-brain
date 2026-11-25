@@ -2662,11 +2662,12 @@ async function linkTarget(file) {
 }
 async function atomicWrite(file, text3) {
   const target = await linkTarget(file);
-  const mode = await stat3(target).then((info) => info.mode & 511, () => 420);
+  const existing = await stat3(target).then((info) => info.mode & 511, () => void 0);
   await mkdir3(path8.dirname(target), { recursive: true });
   const temporary = `${target}.mainline-${process.pid}.tmp`;
   try {
-    await writeFile3(temporary, text3, { mode });
+    await writeFile3(temporary, text3, { mode: existing ?? 420 });
+    if (existing !== void 0) await chmod2(temporary, existing);
     await rename3(temporary, target);
   } catch (error) {
     await rm2(temporary, { force: true });
@@ -5332,7 +5333,7 @@ var OLD_FOLDER_EVERY_MS = 3e4;
 function homeAsTilde(file, home = os4.homedir()) {
   return home && (file === home || file.startsWith(`${home}${path17.sep}`)) ? `~${file.slice(home.length)}` : file;
 }
-var VERSION2 = true ? "0.10.1" : "dev";
+var VERSION2 = true ? "0.10.2" : "dev";
 var isRecord18 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var own3 = (record, key) => Object.hasOwn(record, key) ? record[key] : void 0;
 var contentKey = (value) => createHash("sha1").update(JSON.stringify(value)).digest("base64url").slice(0, 16);

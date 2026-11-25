@@ -1,5 +1,15 @@
 # 更新记录 / Changelog
 
+## 0.10.2
+
+插件介绍和 README 开头加上一句「有限的注意力，迅速收回。」，末尾加上反馈渠道和 Star 邀请；插件市场列表里的简介也以这句开头。README 写明在 codexhost 0.26.0 上测试过。
+
+修了一处：umask 为 077 时，安装或卸载 Agent 协作会把 `~/.claude/settings.json` 和 `~/.codex/AGENTS.md` 原有的权限收紧成只有自己能读写（比如 644 变成 600）。现在原有文件保持原来的权限；新建的文件仍按 umask。
+
+The extension's details and the README now open with "Your attention is limited; get it back fast." and end with where to send feedback and an invitation to star the repository; the short description in the marketplace list starts with the same line. The README now says the extension is tested on codexhost 0.26.0.
+
+One fix: with a umask of 077, installing or removing the agent integration narrowed the existing permissions of `~/.claude/settings.json` and `~/.codex/AGENTS.md` to owner-only (644 became 600, for example). An existing file now keeps its permissions; a new file still follows the umask.
+
 ## 0.10.1
 
 插件介绍配上了图：插件页面和 README 里有侧栏悬停卡片、工作方式图、总览页和收藏回复的截图，图里的示例数据都是虚构的。README 中英文两节各有一套，`npm run screenshots` 可以重新生成。插件本身的功能没有变化。
