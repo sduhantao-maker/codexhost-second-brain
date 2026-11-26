@@ -5742,7 +5742,7 @@ var OLD_FOLDER_EVERY_MS = 3e4;
 function homeAsTilde(file, home = os4.homedir()) {
   return home && (file === home || file.startsWith(`${home}${path17.sep}`)) ? `~${file.slice(home.length)}` : file;
 }
-var VERSION2 = true ? "0.10.4" : "dev";
+var VERSION2 = true ? "0.10.5" : "dev";
 var isRecord18 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var own3 = (record, key) => Object.hasOwn(record, key) ? record[key] : void 0;
 var contentKey = (value) => createHash("sha1").update(JSON.stringify(value)).digest("base64url").slice(0, 16);

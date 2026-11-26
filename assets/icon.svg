@@ -1,39 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <!-- Second Brain, concept 1 "mainline brain": a brain seen from above whose midline
-       fissure is the mainline: reached milestone (white dot), current (amber), planned (ring).
-       Colours: tile #3B6EF6 to #1E41B0 (same as the current icon), white, amber #FBBF24. -->
-  <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3B6EF6"/>
-      <stop offset="1" stop-color="#1E41B0"/>
-    </linearGradient>
-    <!-- White paints the brain; black cuts it back to the tile. -->
-    <mask id="brain" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
-      <!-- outline: twelve lobes with rounded creases, sharp notches at the midline -->
-      <path fill="#fff" d="M128 60.1A26 26 0 0 1 172.9 61.7A7 7 0 0 0 180.2 65.3A23 23 0 0 1 206.6 92.4A7 7 0 0 0 210.1 99.8A23 23 0 0 1 214.6 136.9A7 7 0 0 0 213.3 145.4A22 22 0 0 1 197.5 177.7A7 7 0 0 0 191.7 183.5A22 22 0 0 1 163.1 200.9A7 7 0 0 0 156.4 202.2A21 21 0 0 1 128 200.7A21 21 0 0 1 99.6 202.2A7 7 0 0 0 92.9 200.9A22 22 0 0 1 64.3 183.5A7 7 0 0 0 58.5 177.7A22 22 0 0 1 42.7 145.4A7 7 0 0 0 41.4 136.9A23 23 0 0 1 45.9 99.8A7 7 0 0 0 49.4 92.4A23 23 0 0 1 75.8 65.3A7 7 0 0 0 83.1 61.7A26 26 0 0 1 128 60.1Z"/>
-      <g fill="none" stroke="#000" stroke-width="14" stroke-linecap="round">
-        <!-- midline = mainline -->
-        <path stroke-width="18" d="M128 40V216"/>
-        <!-- folds, mirrored left and right -->
-        <path d="M58 104C70 96 84 100 92 92"/>
-        <path d="M198 104C186 96 172 100 164 92"/>
-        <path d="M60 140C72 134 86 142 96 132"/>
-        <path d="M196 140C184 134 170 142 160 132"/>
-        <path d="M76 176C86 168 98 172 106 164"/>
-        <path d="M180 176C170 168 158 172 150 164"/>
-      </g>
-      <!-- room for the three milestones on the mainline -->
-      <g fill="#000">
-        <circle cx="128" cy="84" r="17"/>
-        <circle cx="128" cy="128" r="24"/>
-        <circle cx="128" cy="172" r="17"/>
-      </g>
-    </mask>
-  </defs>
-  <rect width="256" height="256" rx="56" fill="url(#tile)"/>
-  <rect width="256" height="256" fill="#fff" mask="url(#brain)"/>
-  <!-- milestones: reached, current, planned -->
-  <circle cx="128" cy="84" r="9.5" fill="#fff"/>
-  <circle cx="128" cy="128" r="15.5" fill="#FBBF24"/>
-  <circle cx="128" cy="172" r="8" fill="none" stroke="#fff" stroke-width="5"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">Second Brain</title>
+  <path id="tile" fill="#171719" d="M70 0H186C207 0 218 0 229 6C239 11 245 17 250 27C256 38 256 49 256 70V186C256 207 256 218 250 229C245 239 239 245 229 250C218 256 207 256 186 256H70C49 256 38 256 27 250C17 245 11 239 6 229C0 218 0 207 0 186V70C0 49 0 38 6 27C11 17 17 11 27 6C38 0 49 0 70 0Z"/>
+  <g fill="none" stroke="#F6EEDF" stroke-linecap="round" stroke-linejoin="round">
+    <path id="brain" stroke-width="13" d="M127.2 65.7C96.2 65.7 69.6 82.8 56.9 107.4C54.4 112.2 54.1 115.7 49.6 120.2C40.5 128.6 35 135.1 36.6 143.7C38.4 152.9 45.9 158.8 55.8 159.1C66.8 159.2 68.6 160.7 75.3 168C80.6 173.7 86.5 176.1 93 175.4C100.5 175 107.9 170.3 116.3 170.9C128.5 171.7 132.3 179.8 137.4 191.4C139.2 195.3 141 196.2 143.4 195.7C146.3 195 147.1 191.2 147 185.5C146.6 177.9 149.4 174.2 156.8 172.9C177.8 169.6 192.7 152.2 192.7 128.1C192.7 93.4 164.5 65.7 127.2 65.7Z"/>
+    <path id="echo" stroke-width="11.8" d="M132.5 45.6C144.6 38.9 159.4 39.6 172.6 45C205 58.2 223.6 99 211.3 135.1"/>
+  </g>
+  <path id="two-threads" fill="#F6EEDF" d="M67.5 128.4C80.8 116.6 96.9 112.8 119.2 113C142.1 113.3 155 107.9 162.4 95.9C164.4 92.6 168.2 93.7 168 98.7C167.6 115.8 159.6 130.9 144.3 137.3C129.1 143.8 106.4 141.1 90.5 155.2C87.6 157.8 83.6 157.3 81.4 154.5C79.2 151.7 80 148 82.8 145.5C93.6 135.7 107 132.9 121.4 131C137.7 128.9 148.2 124 154.8 114.7C147.8 121.7 135.5 125.2 119.7 125.2C98 125.1 85.6 128.7 75.4 137.3C72.8 139.5 68.7 139.2 66.5 136.4C64.5 133.9 64.9 130.7 67.5 128.4Z"/>
 </svg>

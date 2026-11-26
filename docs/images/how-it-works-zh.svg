@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="500" viewBox="0 0 880 500">
-  <!-- 第二大脑怎么工作。配色取自 assets/icon.svg：蓝色 #3B6EF6 到 #1E41B0、白色、琥珀色 #FBBF24
+  <!-- 第二大脑怎么工作。示意图配色：蓝色 #3B6EF6 到 #1E41B0、白色、琥珀色 #FBBF24
        （当前里程碑）。文字用系统字体；npm run screenshots 把它画成同名的 PNG（2 倍）。
        示例内容都是虚构的（网店项目 acme/shop-web）。 -->
   <defs>
@@ -78,7 +78,7 @@
     <text class="w s" x="104" y="80.5">登录页</text>
     <rect x="154" y="66" width="58" height="21" rx="10.5" fill="#fff" fill-opacity="0.17"/>
     <text class="w s" x="164" y="80.5">PR #42</text>
-    <!-- the mainline: reached, current (amber), planned, as in the icon -->
+    <!-- the mainline: reached, current (amber), planned -->
     <path d="M28 120V139M28 156V176" stroke="#fff" stroke-opacity="0.5" stroke-width="2" stroke-linecap="round"/>
     <circle cx="28" cy="114" r="5.5" fill="#fff"/>
     <text class="w" x="46" y="118.5" style="font-size: 12.5px">提交 PR #42</text>
