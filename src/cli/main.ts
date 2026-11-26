@@ -21,6 +21,7 @@ import {
   isExcluded,
   keepSpinoff,
   linkSpinoff,
+  noteHosts,
   planMilestones,
   reachMilestone,
   recordPromptV2,
@@ -197,6 +198,7 @@ const ZH_ERRORS: Record<ErrorCode, (message: string) => string> = {
   UNAVAILABLE: (message) => `改不了 Agent 协作：${message}`,
   NEWER_VERSION: () => "主线的数据文件是更新版本的插件写的，这个版本不读也不改它。请把第二大脑插件更新到最新版本。",
   PENDING: () => "codexhost 没有及时答复，子对话可能还在打开：开好后会出现在本对话下方，先不要再点。",
+  REMOTE_ATTACHMENTS: () => "这个对话在另一台电脑上，子对话也开在那里，那台电脑读不到本机的文件：开子对话时不能附带照片、文件或视频。",
 };
 
 const EN_ERRORS: Record<ErrorCode, (message: string) => string> = {
@@ -222,6 +224,7 @@ const EN_ERRORS: Record<ErrorCode, (message: string) => string> = {
   UNAVAILABLE: (message) => `The agent integration cannot be changed: ${message}`,
   NEWER_VERSION: () => "A data file was written by a newer version of the extension; this version neither reads nor changes it. Update the Second Brain extension.",
   PENDING: () => "No answer from codexhost yet; the child may still open under this conversation.",
+  REMOTE_ATTACHMENTS: () => "This conversation is on another computer, where the child opens too, and that computer cannot read files on this one: no photos, files or videos can go along.",
 };
 
 const zh = {
@@ -787,16 +790,21 @@ async function execute(
       if (spinoff.state === "spawned" && spinoff.childThreadId)
         return reply(t.spawned(spinoff.text, spinoff.childThreadId), { ok: true, childThreadId: spinoff.childThreadId });
       const current = currentMilestone(conversation);
+      const hostId = conversation.hostId ?? (await readIndex(refsPaths(dataDir))).threads[threadId]?.hostId;
       const api = io.delegation ?? new ExternalApi(path.join(dataRootOf(dataDir, io.env), "cli-credentials.json"), 20_000);
       const childThreadId = await spawnChild(api, {
         parentThreadId: threadId,
         problem: spinoff.text,
         parentTitle: conversation.title,
         locale,
+        ...(hostId ? { hostId } : {}),
         ...(current ? { currentMilestone: current.title } : {}),
         ...(flags.harness ? { harnessId: flags.harness } : {}),
       });
-      await update((draft, ctx) => linkSpinoff(draft, threadId, spinoff.id, childThreadId, ctx));
+      await update((draft, ctx) => {
+        linkSpinoff(draft, threadId, spinoff.id, childThreadId, ctx);
+        if (hostId) noteHosts(draft, [[threadId, hostId], [childThreadId, hostId]]);
+      });
       return reply(t.spawned(spinoff.text, childThreadId), { ok: true, childThreadId });
     }
     case "keep": {
@@ -918,10 +926,11 @@ async function favorite(
   }
   const threadId = thread();
   const credentials = path.join(dataRootOf(dataDir, io.env), "cli-credentials.json");
+  const hostId = state.conversations[threadId]?.hostId ?? index.threads[threadId]?.hostId;
   let input: NewFavorite;
   if (action === "last" && !words.length) {
     // While the agent runs this, its own turn is still going: the last reply is the previous turn's.
-    const latest = await (io.turns ?? new ExternalApi(credentials, 20_000)).readTurns(threadId);
+    const latest = await (io.turns ?? new ExternalApi(credentials, 20_000)).readTurns(threadId, undefined, hostId);
     const last = lastReply(latest.turns);
     if (!last) throw new MainlineError("INVALID_ARGUMENT", t.favNoReply);
     input = { threadId, text: last.text, role: "agent", turn: last.turn, source: "chat" };
@@ -929,13 +938,13 @@ async function favorite(
     const passage = textOf(rest, "text");
     // Where it is said, when it can be found quickly among the latest turns.
     const where = await (io.turns ?? new ExternalApi(credentials, 5000))
-      .readTurns(threadId)
+      .readTurns(threadId, undefined, hostId)
       .then((latest) => locatePassage(passage, latest.turns))
       .catch(() => undefined);
     input = { threadId, text: passage, source: "chat", ...(where ? { turn: where.turn, role: where.role } : {}) };
   }
   const title = titleOf(threadId);
-  const { result } = await updateFavorites(paths, (file) => addFavorite(file, { ...input, ...(title ? { threadTitle: title } : {}) }, now));
+  const { result } = await updateFavorites(paths, (file) => addFavorite(file, { ...input, ...(title ? { threadTitle: title } : {}), ...(hostId ? { hostId } : {}) }, now));
   const shown = excerpt(result.favorite.text);
   return reply(result.added ? t.favSaved(shown, result.favorite.turn) : t.favAgain(shown), { ok: true, ...result });
 }

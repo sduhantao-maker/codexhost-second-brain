@@ -41,7 +41,8 @@ export interface CapsuleOptions {
   mutate(params: MutateV2Params): Promise<void>;
   /** Opens a child conversation for a spin-off. */
   spawn?(spinoffId: string): Promise<void>;
-  openThread(threadId: string): void;
+  /** Opens a conversation; `hostId` when it is known to be on another computer. */
+  openThread(threadId: string, hostId?: string): void;
   /** Other backend calls: `search`, and `refs.seen`, which marks a PR's news as seen. */
   call?(method: string, params?: unknown): Promise<unknown>;
   /**
@@ -903,7 +904,8 @@ export class Capsule {
             on: {
               click: (event) => {
                 event.stopPropagation();
-                this.options.openThread(item.threadId);
+                if (item.hostId) this.options.openThread(item.threadId, item.hostId);
+                else this.options.openThread(item.threadId);
                 this.#setOpen(false);
               },
             },
@@ -945,7 +947,8 @@ export class Capsule {
               click: (event) => {
                 event.stopPropagation();
                 void this.options.call?.("refs.seen", { key: ref.key });
-                this.options.openThread(origin.threadId);
+                if (origin.hostId) this.options.openThread(origin.threadId, origin.hostId);
+                else this.options.openThread(origin.threadId);
                 this.#setOpen(false);
               },
             },

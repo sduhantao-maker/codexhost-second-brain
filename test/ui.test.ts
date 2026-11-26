@@ -8,7 +8,9 @@ import type { DesktopSidebarRow } from "../src/host/types.js";
 import { freeBand } from "../src/ui/band.js";
 import { Capsule, type CapsuleModel, type CapsuleOptions } from "../src/ui/capsule.js";
 import { clientId, startController, type SurfaceAdapter } from "../src/ui/controller.js";
-import { currentWebThread, openWebThread, webParents } from "../src/web/adapter.js";
+import { webSessionId } from "../src/core/hosts.js";
+import type { WebApi } from "../src/host/types.js";
+import { createWebAdapter, currentWebSession, currentWebThread, openWebThread, OPEN_EVENT, rowSession, webParents, webRows } from "../src/web/adapter.js";
 import { NOW, ref42, sampleSearchResults, sampleSnapshot, sampleView, T } from "./fixtures/v2.js";
 
 const shadowOf = (capsule: Capsule) => capsule.host.shadowRoot!;
@@ -77,6 +79,22 @@ describe("current window", () => {
     // A new conversation that was never sent has a draft id, which is no Thread.
     portal.setAttribute(COMPOSER_ATTRIBUTE, "draft-e0aa");
     expect(currentDesktopThread(document, rows)).toBe("row-thread");
+    portal.setAttribute(COMPOSER_ATTRIBUTE, "client-new-thread:5f0c9a1e-0000-4000-8000-000000000001");
+    expect(currentDesktopThread(document, rows)).toBe("row-thread");
+    // Nor is a draft's sidebar row, whatever it holds.
+    expect(currentDesktopThread(document, [{ ...rows[0]!, threadId: "client-new-thread:5f0c9a1e-0000-4000-8000-000000000001" }])).toBeNull();
+  });
+
+  it("does not use a retained previous Desktop conversation when a new draft is open", () => {
+    const old = document.createElement("div");
+    old.setAttribute(COMPOSER_ATTRIBUTE, "old-thread");
+    const draft = document.createElement("div");
+    draft.setAttribute(COMPOSER_ATTRIBUTE, "draft-19");
+    draft.getClientRects = () => [{ width: 10, height: 10 }] as unknown as DOMRectList;
+    document.body.append(old, draft);
+    expect(currentDesktopThread(document, [])).toBeNull();
+    draft.setAttribute(COMPOSER_ATTRIBUTE, "new-thread");
+    expect(currentDesktopThread(document, [])).toBe("new-thread");
   });
 
   it("reports only live delegation links from Desktop's tree", () => {
@@ -134,6 +152,167 @@ describe("current window", () => {
       <div data-row-key="workspace:w1" role="treeitem" data-thread-parent="aaa"></div>
       <div data-row-key="session:self" role="treeitem" data-thread-parent="self"></div>`;
     expect(webParents(document)).toEqual({ kid: "aaa", kid2: "aaa" });
+  });
+});
+
+describe("conversations on another computer in codexhost Web", () => {
+  const HOST = "remote-peer:0d1e2f3a-aaaa-4bbb-8ccc-000000000001";
+  const REMOTE = "019b0001-aaaa-7bbb-8ccc-00000000000a";
+  const CHILD = "019b0003-aaaa-7bbb-8ccc-00000000000c";
+  const LOCAL = "019b0002-aaaa-7bbb-8ccc-00000000000b";
+  const remoteKey = (threadId: string, hostId = HOST) => webSessionId(threadId, hostId);
+  const base64 = (value: unknown) => `web-remote:${btoa(JSON.stringify(value)).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "")}`;
+
+  it("reads a remote row's key in the Recent and the workspace forms, and leaves local rows as they were", () => {
+    document.body.innerHTML = `
+      <div data-row-key="recent:${remoteKey(REMOTE)}" role="treeitem"></div>
+      <div data-row-key="session:${remoteKey(REMOTE)}" role="treeitem"></div>
+      <div data-row-key="session:${LOCAL}" role="treeitem"></div>
+      <div data-row-key="recent:${LOCAL}" role="treeitem"></div>`;
+    const rows = [...document.querySelectorAll("[data-row-key]")];
+    expect(rows.map((row) => rowSession(row))).toEqual([
+      { threadId: REMOTE, hostId: HOST },
+      { threadId: REMOTE, hostId: HOST },
+      { threadId: LOCAL },
+      { threadId: LOCAL },
+    ]);
+  });
+
+  it("reads and opens conversations linked into a workspace, including remote ones", () => {
+    const group = "remote-workspace:group";
+    document.body.innerHTML = `<div data-sidebar-group="${group}">
+      <div role="treeitem" aria-current="page" data-row-key="linked:${group}:${remoteKey(REMOTE)}"></div>
+      <div role="treeitem" data-row-key="linked:${group}:${LOCAL}"></div>
+      <div role="treeitem" data-row-key="linked:${group}:${remoteKey("draft-19")}"></div>
+    </div>`;
+    const [row, local, draft] = [...document.querySelectorAll("[role=treeitem]")];
+    expect(currentWebSession(document)).toEqual({ threadId: REMOTE, hostId: HOST });
+    expect(rowSession(local)).toEqual({ threadId: LOCAL });
+    expect(rowSession(draft)).toBeUndefined();
+    expect(webRows(document).hosts).toEqual({ [REMOTE]: HOST });
+    const clicked = vi.fn();
+    row!.addEventListener("click", clicked);
+    openWebThread(document, REMOTE, HOST);
+    expect(clicked).toHaveBeenCalledOnce();
+  });
+
+  it("ignores a row whose key does not decode: bad base64, a bad host id, a bad conversation id, a draft, other rows", () => {
+    for (const key of [
+      "recent:web-remote:@@@",
+      "session:web-remote:",
+      `session:${base64(["remote-peer:bad id", REMOTE])}`,
+      `recent:${base64(["local", REMOTE])}`,
+      `session:${base64([HOST, "__proto__"])}`,
+      `session:${base64([HOST, "draft-4"])}`,
+      `session:${base64({ hostId: HOST, threadId: REMOTE })}`,
+      "session:web-remote:draft-3",
+      "session:draft-19",
+      "recent:draft-19",
+      "workspace:remote-workspace:abc",
+      `linked:workspace-key:${LOCAL}`,
+      "empty:host-scope",
+      "overflow:flat",
+    ]) {
+      document.body.innerHTML = `<div data-row-key="${key}" role="treeitem" aria-current="page"></div>`;
+      expect(rowSession(document.querySelector("[data-row-key]")), key).toBeUndefined();
+      expect(currentWebThread(document), key).not.toBeTypeOf("string");
+    }
+  });
+
+  it("tells the open conversation and its host, from the selected row or the right panel", () => {
+    document.body.innerHTML = `
+      <div data-row-key="session:${LOCAL}" role="treeitem"></div>
+      <div data-row-key="recent:${remoteKey(REMOTE)}" role="treeitem" aria-current="page"></div>`;
+    expect(currentWebSession(document)).toEqual({ threadId: REMOTE, hostId: HOST });
+    expect(currentWebThread(document)).toBe(REMOTE);
+    document.body.innerHTML = `<div data-row-key="session:${LOCAL}" role="treeitem"></div><div data-sidebar-right-session="${remoteKey(REMOTE)}"></div>`;
+    const panel = document.querySelector<HTMLElement>("[data-sidebar-right-session]")!;
+    panel.getClientRects = () => [{ width: 10, height: 10 }] as unknown as DOMRectList;
+    expect(currentWebSession(document)).toEqual({ threadId: REMOTE, hostId: HOST });
+    // When the user selects a draft, an old right panel may still be visible for a render.
+    const selected = document.querySelector("[role=treeitem]")!;
+    selected.setAttribute("data-row-key", "session:draft-19");
+    selected.setAttribute("aria-current", "page");
+    expect(currentWebSession(document)).toBeNull();
+    selected.removeAttribute("aria-current");
+    // A draft open in the right panel is no conversation.
+    panel.setAttribute("data-sidebar-right-session", "draft-19");
+    expect(currentWebSession(document)).toBeNull();
+  });
+
+  it("opens one by its row, else by codexhost Web's own link for it; a local one as before", () => {
+    document.body.innerHTML = `<div data-row-key="session:${remoteKey(REMOTE)}" role="treeitem"></div>`;
+    const clicked = vi.fn();
+    document.querySelector("[data-row-key]")!.addEventListener("click", clicked);
+    openWebThread(document, REMOTE, HOST);
+    expect(clicked).toHaveBeenCalledOnce();
+    // No row for it: codexhost Web's `?session=` link, with its `web-remote:` session id.
+    const assign = vi.fn();
+    const page = { querySelectorAll: () => [], defaultView: { location: { href: "http://127.0.0.1:8080/?tab=1", assign } } } as unknown as Document;
+    openWebThread(page, REMOTE, HOST);
+    const url = new URL(assign.mock.calls[0]![0] as string);
+    expect(url.searchParams.get("session")).toBe(remoteKey(REMOTE));
+    expect(url.searchParams.get("tab")).toBe("1");
+    openWebThread(page, LOCAL);
+    expect(new URL(assign.mock.calls[1]![0] as string).searchParams.get("session")).toBe(LOCAL);
+  });
+
+  it("reports the delegation links and the hosts of the remote rows its sidebar shows", () => {
+    document.body.innerHTML = `
+      <div data-row-key="session:${remoteKey(REMOTE)}" role="treeitem"></div>
+      <div data-row-key="session:${remoteKey(CHILD)}" role="treeitem" data-thread-parent="${remoteKey(REMOTE)}"></div>
+      <div data-row-key="session:${LOCAL}" role="treeitem"></div>`;
+    expect(webRows(document)).toEqual({ parents: { [CHILD]: REMOTE }, hosts: { [REMOTE]: HOST, [CHILD]: HOST } });
+  });
+
+  it("knows a remote row's host from the row and from the snapshot, names it for the open conversation, and opens such conversations by it", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = `
+      <aside data-cx-region="sidebar">
+        <div data-row-key="recent:${remoteKey(REMOTE)}" role="treeitem" aria-current="page"><span class="title">远程</span></div>
+        <div data-row-key="session:${LOCAL}" role="treeitem"><span class="title">本机</span></div>
+      </aside>`;
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const api: WebApi = {
+      id: "second-brain",
+      signal: new AbortController().signal,
+      apiVersion: 1,
+      dom: { mount: () => undefined },
+      track: () => undefined,
+      assets: { url: (file) => file },
+      storage: { get: async () => ({}), set: async (values) => values, onChange: () => () => undefined },
+      backend: { invoke },
+    };
+    const adapter = createWebAdapter(api, document);
+    const seen: Array<string | null> = [];
+    const stop = adapter.watchCurrentThread((threadId) => seen.push(threadId));
+    try {
+      expect(seen).toEqual([REMOTE]);
+      expect(adapter.hostOf?.(REMOTE)).toBe(HOST);
+      expect(adapter.hostOf?.(LOCAL)).toBeUndefined();
+      // The sidebar's remote rows go to the backend with their hosts.
+      expect(invoke).toHaveBeenCalledWith("reportTree", { surface: "web", nodes: {}, parents: {}, hosts: { [REMOTE]: HOST } });
+      const title = document.querySelector('[data-row-key^="recent:"] .title')!;
+      expect(adapter.rowAt?.(title)).toEqual({ element: title.parentElement, threadId: REMOTE, hostId: HOST });
+      expect(adapter.rowAt?.(document.querySelector('[data-row-key^="session:"] .title'))).toEqual({ element: document.querySelector('[data-row-key^="session:"]'), threadId: LOCAL });
+      expect(adapter.rowsFor?.(REMOTE)).toEqual([title.parentElement]);
+      // A child the snapshot names, not in the sidebar: opened by its host, through the overview's request too.
+      adapter.onData?.({ state: sampleSnapshot().state!, info: {}, settings: DEFAULT_SETTINGS, version: "v", alerts: [], parents: {}, hosts: { [CHILD]: HOST, "draft-3": HOST, [LOCAL]: "local" } }, REMOTE);
+      expect(adapter.hostOf?.(CHILD)).toBe(HOST);
+      expect(adapter.hostOf?.("draft-3")).toBeUndefined();
+      expect(adapter.hostOf?.(LOCAL)).toBeUndefined();
+      document.body.insertAdjacentHTML("beforeend", `<div data-row-key="session:${remoteKey(CHILD)}" role="treeitem"></div>`);
+      const clicked = vi.fn();
+      document.querySelector(`[data-row-key="session:${remoteKey(CHILD)}"]`)!.addEventListener("click", clicked);
+      const detail: { threadId: string; handled?: boolean } = { threadId: CHILD };
+      window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail }));
+      expect(detail.handled).toBe(true);
+      expect(clicked).toHaveBeenCalledOnce();
+    } finally {
+      stop();
+      adapter.dispose?.();
+      vi.useRealTimers();
+    }
   });
 });
 

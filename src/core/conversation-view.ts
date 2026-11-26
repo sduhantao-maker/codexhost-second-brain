@@ -3,6 +3,7 @@
  * overview page. Every surface shows these; none of them assembles state by itself.
  */
 import { cleanTags, currentMilestone, progressOf, type Conversation, type ConversationStatus, type MilestoneState, type Spinoff, type StateV2 } from "./conversation.js";
+import type { HostView } from "./hosts.js";
 import type { Stamp, ThreadInfo, ThreadStatus } from "./model.js";
 import type { RefView } from "./refs.js";
 
@@ -34,6 +35,8 @@ export interface RelatedView {
   /** Title of its current milestone. */
   current?: string;
   progress?: { done: number; total: number };
+  /** Its remote host, when it is on another computer (the backend adds it): opening it names that host. */
+  hostId?: string;
 }
 
 export interface ConversationView {
@@ -61,6 +64,11 @@ export interface ConversationView {
   summary?: { at: number; model: string };
   /** What the user fixed by hand, which model summaries leave alone. */
   pinned?: { title?: true; tags?: true; status?: true; milestones?: number };
+  /**
+   * The computer the conversation runs on, when it is not this one: its remote host's name and how
+   * it is doing, as codexhost says. The backend adds it; views made from a snapshot have none.
+   */
+  host?: HostView;
 }
 
 /** Facts a draft is made from, gathered by the backend from codexhost and the link index. */

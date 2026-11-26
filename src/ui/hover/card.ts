@@ -50,16 +50,18 @@ export interface ComposeState {
   uploading?: number;
   /** Why files were left out (too large, too many). */
   notice?: string;
-  /** How the last attempt went. */
-  /** How the last try went; `pending`: codexhost has not answered yet, and the child may still open. */
-  result?: { ok: true; childThreadId: string; title: string } | { ok: false; message: string; pending?: true };
+  /**
+   * How the last try went; `pending`: codexhost has not answered yet, and the child may still open.
+   * `hostId`: the child opened on another computer (its parent's), which opening it names.
+   */
+  result?: { ok: true; childThreadId: string; title: string; hostId?: string } | { ok: false; message: string; pending?: true };
 }
 
 export const COMPOSE_IDLE: ComposeState = { open: false, text: "", files: [], armed: null, busy: false };
 
 export interface CardActions {
-  /** Opens another conversation (a child, the parent, a linked one). */
-  open(threadId: string): void;
+  /** Opens another conversation (a child, the parent, a linked one); `hostId` when it is known to be on another computer. */
+  open(threadId: string, hostId?: string): void;
   /** Unfolds a folded list. */
   expand(what: Expandable): void;
   /** A PR or issue link was followed. */
@@ -93,6 +95,8 @@ export interface CardContext {
   summaryRefused?: boolean;
   /** A summary asked for failed for another reason: why, in the card's language. */
   summaryFailed?: string;
+  /** The conversation is on another computer: a child opens there, and no files can go along. */
+  remote?: boolean;
 }
 
 const shortId = (threadId: string) => `#${threadId.slice(0, 8)}`;
@@ -196,8 +200,8 @@ function compose(view: ConversationView, ctx: CardContext): HTMLElement {
           "div",
           { class: "compose-result", attrs: { "data-ok": "" } },
           h("span", { text: t.spawned(state.result.title) }),
-          ((childThreadId) => h("button", { class: "btn small", text: t.openIt, attrs: { type: "button" }, on: { click: () => ctx.actions.open(childThreadId) } }))(
-            state.result.childThreadId,
+          (({ childThreadId, hostId }) => h("button", { class: "btn small", text: t.openIt, attrs: { type: "button" }, on: { click: () => ctx.actions.open(childThreadId, hostId) } }))(
+            state.result,
           ),
         )
       : state.result.pending
@@ -235,20 +239,24 @@ function compose(view: ConversationView, ctx: CardContext): HTMLElement {
     const text = input.value.trim();
     if (text) ctx.actions.spawn({ text }, "new");
   });
-  const attach = h("button", {
-    class: "attach",
-    text: "📎",
-    title: t.attachTip,
-    attrs: { type: "button", "aria-label": t.attach, disabled: state.busy ? "" : undefined },
-    on: { click: () => ctx.actions.attach() },
-  });
+  // A child of a conversation on another computer opens there, where files kept here cannot be read: none is offered.
+  const attach = ctx.remote
+    ? null
+    : h("button", {
+        class: "attach",
+        text: "📎",
+        title: t.attachTip,
+        attrs: { type: "button", "aria-label": t.attach, disabled: state.busy ? "" : undefined },
+        on: { click: () => ctx.actions.attach() },
+      });
+  const notice = state.notice ?? (ctx.remote ? t.remoteFiles : undefined);
   return h(
     "div",
-    { class: "compose", attrs: { "data-open": "" } },
+    { class: "compose", attrs: { "data-open": "", "data-remote": ctx.remote ? "" : undefined } },
     result,
     h("div", { class: "compose-field" }, input, attach),
     state.files.length ? h("ul", { class: "attachments" }, ...state.files.map((file) => attachmentRow(file, ctx))) : null,
-    state.notice ? h("div", { class: "compose-notice", attrs: { role: "status" }, text: state.notice }) : null,
+    notice ? h("div", { class: "compose-notice", attrs: { role: "status" }, text: notice }) : null,
     h(
       "div",
       { class: "compose-buttons" },
@@ -304,6 +312,14 @@ function head(view: ConversationView, ctx: CardContext): HTMLElement {
       view.updatedAt ? h("span", { class: "when", text: t.time(view.updatedAt, now), title: t.date(view.updatedAt) }) : null,
       view.summary ? h("span", { class: "when summarized", text: t.summarized(t.time(view.summary.at, now)), title: view.summary.model }) : null,
     ),
+    view.host
+      ? h(
+          "div",
+          { class: "host", attrs: { "data-state": view.host.state }, title: t.hostTip },
+          h("span", { class: "dot", attrs: { "data-host": view.host.state, "aria-hidden": "true" } }),
+          h("span", { class: "host-text", text: t.host(view.host.name, view.host.state) }),
+        )
+      : null,
     view.tags.length ? h("div", { class: "tags" }, ...view.tags.map((tag) => h("span", { class: "chip", text: tag, title: tag }))) : null,
   );
 }
@@ -324,7 +340,7 @@ function relationRow(label: string, other: RelatedView, role: string, ctx: CardC
       class: "rel",
       title: t.open(other.title),
       attrs: { type: "button", "data-role": role, "data-thread": other.threadId },
-      on: { click: () => ctx.actions.open(other.threadId) },
+      on: { click: () => ctx.actions.open(other.threadId, other.hostId) },
     },
     h("span", { class: "rel-label", text: label }),
     h("span", { class: "dot", title: t.live[other.threadStatus], attrs: { "data-status": other.threadStatus } }),
@@ -493,7 +509,7 @@ function children(view: ConversationView, ctx: CardContext): HTMLElement | null 
           class: "child",
           title: t.open(child.title),
           attrs: { type: "button", "data-thread": child.threadId },
-          on: { click: () => ctx.actions.open(child.threadId) },
+          on: { click: () => ctx.actions.open(child.threadId, child.hostId) },
         },
         h("span", { class: "dot", title: t.live[child.threadStatus], attrs: { "data-status": child.threadStatus } }),
         h("span", { class: "child-body" }, h("span", { class: "child-title", text: child.title }), meta ? h("span", { class: "child-meta", text: meta }) : null),

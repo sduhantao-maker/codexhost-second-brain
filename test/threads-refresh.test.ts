@@ -98,6 +98,12 @@ const ids = (count: number, prefix = "t") => Array.from({ length: count }, (_, i
 const service = () => new ThreadInfoService(api, log, () => now);
 
 describe("thread facts from one shared list", () => {
+  it("discards draft sessions in host listings before scanners or summaries can read them", async () => {
+    host.listed = ["draft-19", "client-new-thread:5f0c9a1e-0000-4000-8000-000000000001", "ready"].map((threadId) => ({ threadId, status: "completed" }));
+    const page = await api.listThreads();
+    expect(page.threads.map((thread) => thread.threadId)).toEqual(["ready"]);
+  });
+
   it("answers idle conversations from one list, shared by overlapping polls", async () => {
     const active = ids(30);
     host.listed = active.map((threadId) => ({ threadId, status: "completed" }));

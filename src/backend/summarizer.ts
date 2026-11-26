@@ -14,10 +14,17 @@
  * any again), and gives no conversation a new mainline once the state holds as many as it keeps.
  * No call is spent on a conversation without a mainline when there is no room for one
  * (`hasRoomForMainline`); a summary refused for room after all (STATE_FULL) waits the longest.
+ *
+ * A conversation on another computer (a remote host paired with codexhost Web) is read on that host
+ * and summarized here like a local one: its host's latest list stands beside this machine's when
+ * finished turns are looked for, and the backfill takes it from the link index. While its host
+ * cannot be reached nothing is read or sent; and at most one of the workers is on such a
+ * conversation at a time, so a slow host never holds up the summaries of this machine.
  */
 import path from "node:path";
 import type { StateV2 } from "../core/conversation.js";
-import { applySummary, hasRoomForMainline, includeInSummaries, isExcluded, MAX_CONVERSATIONS, type SummaryInput } from "../core/conversation-ops.js";
+import { applySummary, hasRoomForMainline, includeInSummaries, isExcluded, MAX_CONVERSATIONS, noteHosts, type SummaryInput } from "../core/conversation-ops.js";
+import { shortHost } from "../core/hosts.js";
 import { MainlineError, requestOf, summaryEngineFor, type Settings } from "../core/model.js";
 import type { RefIndex } from "../core/refs.js";
 import type { SummarizerStatus } from "../core/rpc.js";
@@ -58,6 +65,8 @@ export const AGAIN_AFTER_MS = 10 * 60_000;
 export const DAILY_LIMIT = 200;
 const POLL_MS = 60_000;
 const WORKERS = 2;
+/** Of those, at most this many on conversations of other computers at once. */
+const REMOTE_WORKERS = 1;
 /** A conversation whose summary failed is tried again automatically after this long, then twice as long each time, up to the cap. */
 export const RETRY_FIRST_MS = 30 * 60_000;
 export const RETRY_CAP_MS = 8 * 60 * 60_000;
@@ -74,6 +83,14 @@ const AGENTS_KEPT = 5000;
 
 export type SummaryReason = "manual" | "auto" | "backfill";
 
+/** Conversations on other computers: where each runs, whether its host can be reached, and what each host listed last. */
+export interface SummarizerRemote {
+  hostOf(threadId: string): string | undefined;
+  down(hostId: string): boolean;
+  /** The latest list of every host that can be reached, each entry naming its host. */
+  listed(): ListedThread[];
+}
+
 export interface SummarizerDeps {
   api: Pick<ExternalApi, "readThread" | "readTurns" | "listThreads">;
   /** How many mainlines the state keeps (tests make it small); recordCap() by default. */
@@ -86,6 +103,7 @@ export interface SummarizerDeps {
   settings(): Promise<Settings>;
   /** Called after a summary changed the state. */
   changed(): void;
+  remote?: SummarizerRemote;
   now?(): number;
 }
 
@@ -96,6 +114,15 @@ interface Job {
   updatedAt?: string;
   /** For the backfill: when the backfill that put it in line was asked for. */
   requestedAt?: number;
+  /** The remote host it runs on, when it is on another computer. */
+  hostId?: string;
+}
+
+/** A conversation the backfill will send: newest first, with its update time and, when remote, its host. */
+interface Pending {
+  threadId: string;
+  updatedAt: string;
+  hostId?: string;
 }
 
 /** Where the older conversations stand for a backfill. */
@@ -108,8 +135,8 @@ interface BackfillPlan {
   skipped: number;
   /** Conversations without a mainline left out because the state keeps no more (not in `total`). */
   full: number;
-  /** Still to summarize, newest first, with their update times: what will really be sent. */
-  pending: Array<[string, string]>;
+  /** Still to summarize, newest first: what will really be sent. */
+  pending: Pending[];
 }
 
 /** A summary that failed, and when the conversation is tried again automatically. */
@@ -156,6 +183,8 @@ export class Summarizer {
   readonly #queue: Job[] = [];
   /** Conversations being summarized now, and why. */
   readonly #running = new Map<string, SummaryReason>();
+  /** Those of them on other computers. */
+  readonly #runningRemote = new Set<string>();
   readonly #failures = new Map<string, Failure>();
   /** What the backfill under way has tried, on disk. */
   readonly #tried: BackfillTried;
@@ -241,6 +270,7 @@ export class Summarizer {
       if (PRIORITY[job.reason] < PRIORITY[waiting.reason]) waiting.reason = job.reason;
       if (job.updatedAt) waiting.updatedAt = job.updatedAt;
       if (job.requestedAt !== undefined) waiting.requestedAt = job.requestedAt;
+      if (job.hostId) waiting.hostId = job.hostId;
     } else this.#queue.push(job);
     this.#queue.sort((a, b) => PRIORITY[a.reason] - PRIORITY[b.reason]);
     this.#work();
@@ -253,8 +283,10 @@ export class Summarizer {
    */
   async request(threadId: string): Promise<void> {
     const settings = await this.#deps.settings();
-    // codexhost not answering (in time) is no reason to refuse: the summary then fails when its turn comes.
-    const thread = await within(this.#deps.api.readThread(threadId), READ_WAIT_MS).catch(() => undefined);
+    const hostId = this.#deps.remote?.hostOf(threadId);
+    // codexhost not answering (in time) is no reason to refuse: the summary then fails when its turn
+    // comes. Nor is a host that cannot be reached now, which is not even asked.
+    const thread = hostId && this.#deps.remote?.down(hostId) ? undefined : await within(this.#deps.api.readThread(threadId, hostId), READ_WAIT_MS).catch(() => undefined);
     if (thread) {
       this.#noteAgent(threadId, thread.harnessId);
       if (!summaryEngineFor(settings, thread.harnessId)) throw noSummarizer(thread.harnessId);
@@ -264,7 +296,7 @@ export class Summarizer {
     if (!has(state, threadId) && !hasRoomForMainline(state)) throw stateFull();
     if (isExcluded(state, threadId)) await updateState(this.#deps.paths, (draft) => includeInSummaries(draft, threadId));
     this.#failures.delete(threadId);
-    this.enqueue({ threadId, reason: "manual" });
+    this.enqueue({ threadId, reason: "manual", ...(hostId ? { hostId } : {}) });
   }
 
   /** Summarizes every conversation codexhost has, once; carries on after restarts until done or stopped. */
@@ -351,8 +383,11 @@ export class Summarizer {
       // Waited for briefly: starting a backfill waits on this round.
       listed = (await within(this.#deps.api.listThreads({ limit: 30 }), LIST_WAIT_MS)).threads;
     } catch {
-      return;
+      listed = [];
     }
+    // Conversations on other computers, as their hosts listed them last (each entry names its host).
+    listed = [...listed, ...(this.#deps.remote?.listed() ?? [])];
+    if (!listed.length) return;
     // Whether a conversation without a mainline can get one: else it is not even read.
     const room = hasRoomForMainline(state);
     for (const thread of listed) {
@@ -374,7 +409,7 @@ export class Summarizer {
         this.#noteFull();
         continue;
       }
-      this.enqueue({ threadId: thread.threadId, reason: "auto", updatedAt: thread.updatedAt });
+      this.enqueue({ threadId: thread.threadId, reason: "auto", updatedAt: thread.updatedAt, ...(thread.hostId ? { hostId: thread.hostId } : {}) });
     }
   }
 
@@ -387,10 +422,12 @@ export class Summarizer {
   #plan(state: StateV2, index: RefIndex, settings: Settings, requestedAt?: number): BackfillPlan {
     const plan: BackfillPlan = { total: 0, done: 0, failed: 0, skipped: 0, full: 0, pending: [] };
     const tried = this.#tried.known(requestedAt);
-    const candidates: Array<{ threadId: string; updatedAt: string; kept: boolean }> = [];
+    const candidates: Array<Pending & { kept: boolean }> = [];
     for (const [threadId, record] of Object.entries(index.threads)) {
       // Conversations codexhost cannot read, with nothing said yet, or whose mainline the user deleted.
       if (record.unreadable || record.turns <= 0 || isExcluded(state, threadId)) continue;
+      // On a computer that cannot be reached now: left out until it can (a later round counts it again).
+      if (record.hostId && this.#deps.remote?.down(record.hostId)) continue;
       plan.total += 1;
       const conversation = state.conversations[threadId];
       const summary = conversation?.summary;
@@ -404,7 +441,7 @@ export class Summarizer {
       else if (this.#running.has(threadId)) continue;
       // Sent once by this backfill already (whatever became of it), or failed lately and not due again.
       else if (tried.has(threadId) || !this.#retryDue(threadId, record.updatedAt)) plan.failed += 1;
-      else candidates.push({ threadId, updatedAt: record.updatedAt, kept: conversation !== undefined });
+      else candidates.push({ threadId, updatedAt: record.updatedAt, kept: conversation !== undefined, ...(record.hostId ? { hostId: record.hostId } : {}) });
     }
     // Newest first, as they are sent. Summarizing a conversation that has a mainline adds none; one
     // without gets one, while there is room: past the cap, every new one would push an older one out.
@@ -417,7 +454,8 @@ export class Summarizer {
         continue;
       }
       if (!candidate.kept) room -= 1;
-      plan.pending.push([candidate.threadId, candidate.updatedAt]);
+      const { kept: _kept, ...pending } = candidate;
+      plan.pending.push(pending);
     }
     return plan;
   }
@@ -516,9 +554,10 @@ export class Summarizer {
       return;
     }
     // Newest first; keep the line short so asked-for and automatic summaries are not held up.
-    pending.sort(([, a], [, b]) => (ms(b) ?? 0) - (ms(a) ?? 0));
+    pending.sort((a, b) => (ms(b.updatedAt) ?? 0) - (ms(a.updatedAt) ?? 0));
     const room = WORKERS * 3 - this.#queue.length;
-    for (const [threadId, updatedAt] of pending.slice(0, Math.max(0, room))) this.enqueue({ threadId, reason: "backfill", updatedAt, requestedAt });
+    for (const { threadId, updatedAt, hostId } of pending.slice(0, Math.max(0, room)))
+      this.enqueue({ threadId, reason: "backfill", updatedAt, requestedAt, ...(hostId ? { hostId } : {}) });
   }
 
   /** Takes the jobs waiting for this reason out of the line. Returns how many. */
@@ -547,12 +586,21 @@ export class Summarizer {
     return agent === undefined || summaryEngineFor(settings, agent || undefined) !== undefined;
   }
 
+  /** The remote host a job's conversation runs on, when it is on another computer. */
+  #hostOf(job: Job): string | undefined {
+    return job.hostId ?? this.#deps.remote?.hostOf(job.threadId);
+  }
+
   #work(): void {
     while (!this.#stopped && this.#running.size < WORKERS && this.#queue.length) {
-      const job = this.#queue.shift()!;
+      // A worker is on another computer's conversation already: the next one of this machine goes first.
+      const next = this.#runningRemote.size >= REMOTE_WORKERS ? this.#queue.findIndex((item) => !this.#hostOf(item)) : 0;
+      if (next < 0) break;
+      const job = this.#queue.splice(next, 1)[0]!;
       // Turned off, or today's limit reached, while it waited: an automatic job goes.
       if (job.reason === "auto" && (!this.#autoOn || autoCalls(dayOf(this.#counts, this.#now())) >= DAILY_LIMIT)) continue;
       this.#running.set(job.threadId, job.reason);
+      if (this.#hostOf(job)) this.#runningRemote.add(job.threadId);
       void this.#summarize(job)
         .catch((error: unknown) => {
           // Cut off by stopping: no failure of the conversation's, and nothing to remember.
@@ -566,6 +614,7 @@ export class Summarizer {
         })
         .finally(() => {
           this.#running.delete(job.threadId);
+          this.#runningRemote.delete(job.threadId);
           if (job.reason === "backfill" && this.#backfill) void this.tick();
           this.#work();
         });
@@ -587,7 +636,10 @@ export class Summarizer {
       if (job.reason === "auto") this.#noteFull();
       return;
     }
-    const thread = await api.readThread(job.threadId);
+    // On another computer: read there, and not at all while it cannot be reached.
+    const hostId = this.#hostOf(job);
+    if (hostId && this.#deps.remote?.down(hostId)) throw new Error(`the computer this conversation runs on (remote host ${shortHost(hostId)}) is not connected now`);
+    const thread = await api.readThread(job.threadId, hostId);
     if (!thread) throw new Error("codexhost could not read this conversation");
     this.#noteAgent(job.threadId, thread.harnessId);
     const engine = summaryEngineFor(settings, thread.harnessId);
@@ -598,13 +650,13 @@ export class Summarizer {
     }
     // Mid-turn: wait for the next round, when it has finished.
     if (thread.status === "running" && job.reason === "auto") return;
-    const latest = await api.readTurns(job.threadId);
+    const latest = await api.readTurns(job.threadId, undefined, hostId);
     let turns = latest.turns;
     if (latest.totalTurns > turns.length) {
       turns = [];
       for (let to = latest.totalTurns; to >= 1 && turns.length < TURNS_READ; to -= TURNS_PER_READ) {
         const from = Math.max(1, to - TURNS_PER_READ + 1, latest.totalTurns - TURNS_READ + 1);
-        turns.push(...(await api.readTurns(job.threadId, { from, to })).turns);
+        turns.push(...(await api.readTurns(job.threadId, { from, to }, hostId)).turns);
         if (from <= Math.max(1, latest.totalTurns - TURNS_READ + 1)) break;
       }
     }
@@ -636,6 +688,11 @@ export class Summarizer {
     // Looked at again right before sending: other summaries may have added mainlines meanwhile, and
     // the backfill may have been asked for again or stopped.
     const latestState = await this.#deps.state();
+    if (job.reason === "auto") {
+      // Another round may have read an old snapshot before a previous summary finished.
+      const previous = latestState.conversations[job.threadId]?.summary;
+      if (previous && ((job.updatedAt !== undefined && previous.threadUpdatedAt === job.updatedAt) || this.#now() - previous.at < AGAIN_AFTER_MS)) return;
+    }
     if (!this.#roomFor(latestState, job)) {
       if (job.reason === "manual") throw stateFull();
       return;
@@ -662,6 +719,8 @@ export class Summarizer {
         { at: ctx.now, model, ...(updatedAt ? { threadUpdatedAt: updatedAt } : {}), turns: latest.totalTurns },
         { ...ctx, ...(activityAt !== undefined ? { activityAt } : {}) },
       );
+      // The mainline says where the conversation runs, so it is read there after a restart too.
+      if (hostId) noteHosts(draft, [[job.threadId, hostId]]);
     });
     this.#failures.delete(job.threadId);
     this.#lastError = undefined;
@@ -690,7 +749,10 @@ export class Summarizer {
    */
   async #call(engine: Engine, job: Job, prompt: string, countedAt: number): Promise<{ summary: SummaryInput; model: string }> {
     const started = Date.now();
-    const line = (outcome: string) => `model call: ${engine} ${job.reason} ${job.threadId.slice(0, 8)} ${((Date.now() - started) / 1000).toFixed(1)}s ${outcome}`;
+    // A remote host by the short form of its id only, never by its name.
+    const hostId = this.#hostOf(job);
+    const where = hostId ? ` (remote host ${shortHost(hostId)})` : "";
+    const line = (outcome: string) => `model call: ${engine} ${job.reason} ${job.threadId.slice(0, 8)}${where} ${((Date.now() - started) / 1000).toFixed(1)}s ${outcome}`;
     try {
       const answer = await this.#deps.runModel(engine, { system: SUMMARY_SYSTEM, prompt, schema: SUMMARY_SCHEMA });
       const summary = readSummary(answer.value);

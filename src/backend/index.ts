@@ -12,10 +12,11 @@ import { readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { currentMilestone, emptyStateV2, type Spinoff, type StateV2 } from "../core/conversation.js";
-import { addSpinoff, createConversation, isExcluded, linkSpinoff, maskStoredPrompts, noteParents, spinoffOf } from "../core/conversation-ops.js";
-import { conversationView, type DraftFacts, type ViewSources } from "../core/conversation-view.js";
+import { addSpinoff, createConversation, isExcluded, linkSpinoff, maskStoredPrompts, noteHosts, noteParents, spinoffOf } from "../core/conversation-ops.js";
+import { conversationView, type ConversationView, type DraftFacts, type ViewSources } from "../core/conversation-view.js";
 import { cleanText, DEFAULT_SETTINGS, isThreadId, localeOf, MainlineError, readSettingsValues, type Settings } from "../core/model.js";
 import { searchFavorites, type Favorite, type FavoriteRole } from "../core/favorites.js";
+import { isRemoteHostId, shortHost } from "../core/hosts.js";
 import {
   alerts,
   emptyIndex,
@@ -64,6 +65,7 @@ import { createLog, type Log } from "./log.js";
 import { describeMigration, migrateFromMainline, oldDataDir } from "./migrate-from-mainline.js";
 import { byteSize, clean, fitSnapshot, fitting, fitView } from "./reply-size.js";
 import { applyMutationV2, parseMutationV2 } from "./mutate-v2.js";
+import { RemoteHosts } from "./remote-hosts.js";
 import { Scanner } from "./scanner.js";
 import { createModelRunner, type RunModel } from "./models.js";
 import { Summarizer } from "./summarizer.js";
@@ -82,6 +84,14 @@ const RECENTLY_USED_MS = 10 * 60_000;
 /** GitHub is asked this often while the extension is in use, and every IDLE_EVERY_MS otherwise. */
 const GITHUB_EVERY_MS = 60_000;
 const IDLE_EVERY_MS = 10 * 60_000;
+/** Each remote host's list is asked for this often while the extension is in use, and every IDLE_EVERY_MS otherwise. */
+const REMOTE_EVERY_MS = 60_000;
+/** The first round of remote hosts, this long after the backend starts. */
+const REMOTE_FIRST_MS = 10_000;
+/** A card of a conversation on another computer waits this long at most for codexhost to say what its host is called. */
+const HOST_INFO_WAIT_MS = 1_500;
+/** Conversations on other computers a surface may name in one report of its sidebar. */
+const REPORTED_HOSTS = 500;
 /** A surface's id for itself (`SnapshotParams.client`): random letters, digits and dashes. */
 const CLIENT_ID = /^[A-Za-z0-9-]{8,64}$/u;
 /** The open conversation of at most this many surfaces is kept. */
@@ -158,7 +168,11 @@ function parseTree(params: unknown): TreeReport {
   }
   const parents: TreeReport["parents"] = {};
   for (const [child, parent] of Object.entries(params.parents)) if (isThreadId(child) && isThreadId(parent)) parents[child] = parent;
-  return { nodes, parents };
+  // codexhost Web: the remote host of each conversation on another computer its sidebar shows.
+  const hosts: Record<string, string> = {};
+  if (isRecord(params.hosts))
+    for (const [threadId, hostId] of Object.entries(params.hosts).slice(0, REPORTED_HOSTS)) if (isThreadId(threadId) && isRemoteHostId(hostId)) hosts[threadId] = hostId;
+  return { nodes, parents, ...(Object.keys(hosts).length ? { hosts } : {}) };
 }
 
 /** Live states are refreshed for active conversations that moved this recently, at most this many. */
@@ -246,11 +260,21 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
   const api = new ExternalApi(credentials, 3000, fetch, stopping.signal);
   // Reading a long conversation or starting a delegation can take a while.
   const slowApi = new ExternalApi(credentials, 20_000, fetch, stopping.signal);
-  const threads = new ThreadInfoService(api, log);
-  const integrations = new Integrations({ home: os.homedir(), dataDir: ctx.dataDir, command });
-  const refs = refsPaths(ctx.dataDir);
+  // Conversations on other computers go through codexhost Web's connection to them, which can take a while too.
+  const remoteApi = new ExternalApi(credentials, 8_000, fetch, stopping.signal);
   let lastUsedAt = Date.now();
   const recentlyUsed = () => Date.now() - lastUsedAt < RECENTLY_USED_MS;
+  /** Which conversations run on another computer, the hosts, and their lists, asked for on a timer of their own. */
+  const remote = new RemoteHosts(remoteApi, log, {
+    everyMs: () => (recentlyUsed() ? REMOTE_EVERY_MS : IDLE_EVERY_MS),
+    onListed: (hostId, listed) => threads.noteListed(hostId, listed),
+  });
+  const threads = new ThreadInfoService(api, log, Date.now, {
+    hosts: { hostOf: (threadId) => hostOf(threadId), down: (hostId) => remote.down(hostId), note: (threadId, hostId) => noteHost(threadId, hostId), failed: (hostId, error) => remote.failed(hostId, error) },
+    remoteApi,
+  });
+  const integrations = new Integrations({ home: os.homedir(), dataDir: ctx.dataDir, command });
+  const refs = refsPaths(ctx.dataDir);
   const scanner = new Scanner(slowApi, refs, log, {
     recentEveryMs: () => (recentlyUsed() ? 60_000 : IDLE_EVERY_MS),
     // A conversation with a mainline, a last request or a saved passage keeps its title and project
@@ -260,9 +284,10 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       const saved = await favorites.current();
       return [...Object.keys(state.conversations), ...Object.keys(state.prompts), ...saved.items.map((item) => item.threadId)];
     },
+    remote: { hosts: () => remote.hosts(), down: (hostId) => remote.down(hostId), listed: () => remote.listed(), failed: (hostId, error) => remote.failed(hostId, error) },
   });
   const github = new GitHubWatcher(refs, log, untilAborted(options.runGh ?? createGhRunner(), stopping.signal), Date.now, stopping.signal);
-  const favorites = new FavoritesService(favoritesPaths(ctx.dataDir), slowApi, log);
+  const favorites = new FavoritesService(favoritesPaths(ctx.dataDir), slowApi, log, Date.now, (threadId) => hostOf(threadId));
   const uploads = new Uploads(ctx.dataDir);
   /** A saved passage the overview asked to show in its conversation, until a surface showed it. */
   let reveal: (Reveal & { at: number }) | undefined;
@@ -328,9 +353,28 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
   const titleOf = (threadId: string): string | undefined =>
     own(cached.state.conversations, threadId)?.title ?? threads.get(threadId)?.title ?? own(cachedIndex.index.threads, threadId)?.title;
 
+  /** The remote host a conversation runs on, when it is on another computer; none for a local conversation. */
+  const hostOf = (threadId: string): string | undefined =>
+    remote.hostOf(threadId) ?? own(cached.state.conversations, threadId)?.hostId ?? own(cachedIndex.index.threads, threadId)?.hostId;
+  /** Remembers that a conversation runs on a remote host; its mainline, if it has one, records it at the next upkeep. */
+  const noteHost = (threadId: string, hostId: unknown): void => {
+    if (remote.note(threadId, hostId) && own(cached.state.conversations, threadId)) maintainSoon();
+  };
+  /**
+   * Where the conversation a call names runs: the remote host the call names for it (anything that is
+   * no remote host id is ignored, never trusted), else what the backend knows; none when local.
+   */
+  const hostFrom = (raw: unknown, threadId: string): string | undefined => {
+    const named = isRecord(raw) ? raw.hostId : undefined;
+    if (isRemoteHostId(named)) noteHost(threadId, named);
+    return hostOf(threadId);
+  };
+  /** A PR or issue as the views show it, with where it came from (and that conversation's host, when remote). */
+  const viewRef = (index: RefIndex, ref: Parameters<typeof refView>[1]) => refView(index, ref, titleOf, hostOf);
+
   /** Everything a view needs, from the state, live facts, delegation links and the link index. */
   const sources = (state: StateV2, index: RefIndex): ViewSources => {
-    const refsOf = (threadId: string) => refsForThread(index, threadId).map((ref) => refView(index, ref, titleOf));
+    const refsOf = (threadId: string) => refsForThread(index, threadId).map((ref) => viewRef(index, ref));
     return {
       state,
       info: threads.all(),
@@ -390,8 +434,16 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
         await threads.refresh(activeIds(state), open);
         for (const threadId of open) await threads.lookupChildren(threadId);
         const parents = threads.parentMap();
-        if ([...parents].some(([child, parent]) => state.conversations[child] && state.conversations[child]!.parentId !== parent))
-          await updateState(paths, (draft) => noteParents(draft, parents));
+        // Mainlines of conversations on other computers say where they run, so they are read there after a restart too.
+        const hosts = [...remote.entries()].filter(([threadId, hostId]) => {
+          const conversation = own(state.conversations, threadId);
+          return conversation !== undefined && conversation.hostId !== hostId;
+        });
+        if (hosts.length || [...parents].some(([child, parent]) => state.conversations[child] && state.conversations[child]!.parentId !== parent))
+          await updateState(paths, (draft) => {
+            noteParents(draft, parents);
+            noteHosts(draft, hosts);
+          });
       } catch (error) {
         log.error("maintain", error);
       } finally {
@@ -417,6 +469,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     index: currentIndex,
     settings: currentSettings,
     changed: maintainSoon,
+    remote: { hostOf: (threadId) => hostOf(threadId), down: (hostId) => remote.down(hostId), listed: () => remote.listed() },
   });
   /** Background lookups still running; stopping the backend waits for them. */
   const lookups = new Set<Promise<void>>();
@@ -445,6 +498,8 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       // Opening a conversation marks none of its news seen: only the user acting on the bell does
       // (`refs.seen`, `refs.seenForThread`).
       const focused = isRecord(params.focus) && isThreadId(params.focus.threadId) ? params.focus : undefined;
+      // codexhost Web names the remote host of an open conversation on another computer.
+      if (focused) hostFrom(focused, focused.threadId);
       if (focused && (focused.surface === "desktop" || focused.surface === "web")) {
         // Each window and page on its own: two on different conversations are no change each time they take turns.
         const client = typeof params.client === "string" && CLIENT_ID.test(params.client) ? params.client : undefined;
@@ -478,6 +533,13 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       const pending = pendingReveal();
       const shown = pending && focused?.threadId === pending.threadId ? pending : undefined;
       const left = await oldFolderLeft();
+      const watched = new Set([...Object.keys(state.conversations), ...open, ...(focused ? [focused.threadId] : []), ...Object.keys(parents), ...Object.values(parents)]);
+      // The conversations among those that run on another computer, and their hosts.
+      const hosts: Record<string, string> = {};
+      for (const threadId of watched) {
+        const hostId = hostOf(threadId);
+        if (hostId) hosts[threadId] = hostId;
+      }
       // From what pages show, not from the files: rewriting bookkeeping (when a conversation or a PR
       // was last read, how far a scan got) sends no page the whole snapshot again.
       const version = [
@@ -491,12 +553,13 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
         `${saved.rev}.${saved.items.length}`,
         shown?.id ?? "-",
         left ?? "-",
+        // Where conversations run, and what a card shows of their hosts (a name, connected or not).
+        `${contentKey(hosts)}.${remote.version}`,
       ].join("|");
       if (params.version === version) return { version } satisfies SnapshotResultV2;
-      const watched = new Set([...Object.keys(state.conversations), ...open, ...(focused ? [focused.threadId] : []), ...Object.keys(parents), ...Object.values(parents)]);
       const news = alerts(index)
         .slice(0, ALERTS_SHOWN)
-        .map((ref) => refView(index, ref, titleOf));
+        .map((ref) => viewRef(index, ref));
       // Which project each conversation belongs to, for the overview's "by project" grouping.
       const workspaces: Record<string, string> = {};
       for (const threadId of new Set([...Object.keys(state.conversations), ...Object.keys(state.prompts)])) {
@@ -514,6 +577,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
         command,
         alerts: news,
         parents,
+        hosts,
         summarizer: summarizer.status(),
         workspaces,
         favorites: saved.items.length,
@@ -529,8 +593,28 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     try {
       lastUsedAt = Date.now();
       const threadId = threadIdOf(raw);
+      const hostId = hostFrom(raw, threadId);
+      // On another computer: the card says which, and whether it is connected. What codexhost says of
+      // its hosts is waited for briefly only until it has answered once; after that it is asked in
+      // the background, and the card shows any change with the next snapshot.
+      if (hostId) {
+        if (remote.infoKnown) void remote.refreshInfo();
+        else await within(remote.refreshInfo(), HOST_INFO_WAIT_MS).catch(() => undefined);
+      }
       const [state, index] = [await currentState(), await currentIndex()];
-      const view = conversationView(threadId, sources(state, index));
+      const made = conversationView(threadId, sources(state, index));
+      // The conversations it links to that are on another computer name their host, for opening them.
+      const linked = <T extends { threadId: string }>(item: T): T => {
+        const on = hostOf(item.threadId);
+        return on ? { ...item, hostId: on } : item;
+      };
+      const view: ConversationView = {
+        ...made,
+        children: made.children.map(linked),
+        ...(made.parent ? { parent: linked(made.parent) } : {}),
+        ...(made.related ? { related: linked(made.related) } : {}),
+        ...(hostId ? { host: remote.view(hostId) } : {}),
+      };
       // Fill in what is missing for the next look: live states and delegated children.
       void threads.refresh([threadId, ...view.children.map((child) => child.threadId), ...(view.parent ? [view.parent.threadId] : [])]);
       void threads.lookupChildren(threadId).then((changed) => {
@@ -550,7 +634,13 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       const [state, index] = [await currentState(), await currentIndex()];
       const found = searchConversations({ sources: sources(state, index), index, query: text(raw, "query"), favorites: (await favorites.current()).items });
       freshenRefs(found.flatMap((item) => item.refs));
-      return clean(found);
+      // Those on another computer name their host: codexhost Web opens them by it.
+      return clean(
+        found.map((item) => {
+          const hostId = hostOf(item.threadId);
+          return hostId ? { ...item, hostId } : item;
+        }),
+      );
     } catch (error) {
       rethrow(error);
     }
@@ -559,7 +649,13 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
   ctx.handle("mutate", async (raw: unknown) => {
     try {
       const params = parseMutationV2(raw);
-      const { result } = await updateState(paths, (draft, opCtx) => applyMutationV2(draft, params, opCtx));
+      const hostId = hostFrom(raw, params.threadId);
+      const { result } = await updateState(paths, (draft, opCtx) => {
+        const outcome = applyMutationV2(draft, params, opCtx);
+        // A mainline made for a conversation on another computer says where it runs.
+        if (hostId) noteHosts(draft, [[params.threadId, hostId]]);
+        return outcome;
+      });
       maintainSoon();
       return clean({ ok: true, result: result ?? null });
     } catch (error) {
@@ -579,8 +675,10 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     problem: string;
     seed: { title: string; tags: string[] } | undefined;
     attached: unknown[];
+    /** The remote host the parent runs on, when it is on another computer: the child opens there. */
+    hostId: string | undefined;
   }): Promise<SpawnResult> => {
-    const { threadId, state, spinoff, seed, attached } = ask;
+    const { threadId, state, spinoff, seed, attached, hostId } = ask;
     const conversation = state.conversations[threadId];
     const problem = spinoff?.text ?? cleanText(ask.problem);
     const current = conversation ? currentMilestone(conversation) : undefined;
@@ -597,7 +695,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     // The parent is read once, for its agent and its working folder.
     const reads = new Map<string, Promise<ApiThread | undefined>>();
     const readOnce = (id: string) => {
-      const read = reads.get(id) ?? slowApi.readThread(id);
+      const read = reads.get(id) ?? slowApi.readThread(id, hostId);
       reads.set(id, read);
       return read;
     };
@@ -619,6 +717,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
         ...(current ? { currentMilestone: current.title } : {}),
         ...(threads.get(threadId)?.harnessId ? { harnessId: threads.get(threadId)!.harnessId! } : {}),
         ...(attachments.length ? { attachments } : {}),
+        ...(hostId ? { hostId } : {}),
       });
     } catch (error) {
       if (attachments.length) {
@@ -634,6 +733,8 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       }
       throw error;
     }
+    // A child of a conversation on another computer opened there too.
+    if (hostId) remote.note(childThreadId, hostId);
     // The child is open: from now on the files are its own, whatever happens next. The record says
     // whose, so they can be cleared once it is done.
     const kept = attachments.length
@@ -650,6 +751,11 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
           id = addSpinoff(draft, threadId, problem, opCtx).id;
         }
         linkSpinoff(draft, threadId, id, childThreadId, opCtx);
+        if (hostId)
+          noteHosts(draft, [
+            [threadId, hostId],
+            [childThreadId, hostId],
+          ]);
       });
     } catch (error) {
       log.error(`note child conversation ${childThreadId.slice(0, 8)} opened for a spin-off of ${threadId.slice(0, 8)}`, error);
@@ -657,9 +763,11 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     } finally {
       await kept;
     }
-    log.info(`opened child conversation ${childThreadId.slice(0, 8)} for a spin-off of ${threadId.slice(0, 8)}${attachments.length ? ` with ${attachments.length} attached files` : ""}`);
+    log.info(
+      `opened child conversation ${childThreadId.slice(0, 8)} for a spin-off of ${threadId.slice(0, 8)}${hostId ? ` on remote host ${shortHost(hostId)}` : ""}${attachments.length ? ` with ${attachments.length} attached files` : ""}`,
+    );
     maintainSoon();
-    return { childThreadId };
+    return { childThreadId, ...(hostId ? { hostId } : {}) };
   };
 
   /** Child conversations being opened, by what was asked: a second try joins the first instead of opening another child. */
@@ -674,11 +782,16 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     let handedOver = false;
     try {
       const threadId = threadIdOf(raw);
+      const hostId = hostFrom(raw, threadId);
       const problem = isRecord(raw) && typeof raw.text === "string" ? raw.text.trim() : "";
       const spinoffId = text(raw, "spinoffId");
       if (!spinoffId && !problem) throw new MainlineError("INVALID_ARGUMENT", "spinoffId or text is required");
       if (isRecord(raw) && raw.attachments !== undefined && !Array.isArray(raw.attachments))
         throw new MainlineError("INVALID_ARGUMENT", "attachments must be a list of upload ids");
+      // The child of a conversation on another computer opens there, and that computer cannot read
+      // the files kept here: none is named in its first message (the card offers none to begin with).
+      if (hostId && attached.length)
+        throw new MainlineError("REMOTE_ATTACHMENTS", "Files cannot go along with a child conversation on another computer: it cannot read the files kept on this one");
       let state = await currentState();
       let spinoff: Spinoff | undefined;
       let seed: { title: string; tags: string[] } | undefined;
@@ -708,7 +821,8 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       if (spinoff?.state === "spawned" && spinoff.childThreadId) {
         // Opened already (a second click, or a try that crossed the first): the files sent along are of no use.
         if (attached.length) await uploads.discard(attached).catch((failure: unknown) => log.error("delete the files sent with a child conversation opened before", failure));
-        return clean({ childThreadId: spinoff.childThreadId } satisfies SpawnResult);
+        const childHost = hostOf(spinoff.childThreadId);
+        return clean({ childThreadId: spinoff.childThreadId, ...(childHost ? { hostId: childHost } : {}) } satisfies SpawnResult);
       }
       const key = spinoff ? `${threadId}\n${spinoff.id}` : `${threadId}\n\n${cleanText(problem)}`;
       let job = opening.get(key);
@@ -716,7 +830,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
         // Being opened already: this try waits for that one, and its own files are of no use.
         if (attached.length) await uploads.discard(attached).catch((failure: unknown) => log.error("delete the files sent with a child conversation being opened", failure));
       } else {
-        const started = openChild({ threadId, state, spinoff, problem, seed, attached });
+        const started = openChild({ threadId, state, spinoff, problem, seed, attached, hostId });
         handedOver = true;
         job = started;
         opening.set(key, started);
@@ -792,6 +906,8 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     try {
       const report = parseTree(raw);
       const surface = isRecord(raw) && raw.surface === "web" ? "web" : "desktop";
+      // codexhost Web's sidebar names the host of each conversation on another computer it shows.
+      if (surface === "web") for (const [threadId, hostId] of Object.entries(report.hosts ?? {})) noteHost(threadId, hostId);
       const changed = surface === "web" ? threads.reportWebParents(report.parents) : threads.reportTree(report);
       if (changed) maintainSoon();
       return { ok: true };
@@ -814,7 +930,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
 
   /** As many of these as fit in one answer next to `base` bytes, in order. */
   const fittingViews = (index: RefIndex, refs: ReturnType<typeof refsForThread>, base: number) => {
-    const views = refs.map((ref) => refView(index, ref, titleOf));
+    const views = refs.map((ref) => viewRef(index, ref));
     return views.slice(0, fitting(views, base, byteSize));
   };
   ctx.handle("refs.forThread", async (raw: unknown) => {
@@ -832,7 +948,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     const index = await currentIndex();
     const refs = searchRefs(index, text(raw, "query"), titleOf);
     freshenRefs(refs.map((ref) => ref.key));
-    return clean(refs.map((ref) => refView(index, ref, titleOf)));
+    return clean(refs.map((ref) => viewRef(index, ref)));
   });
   ctx.handle("refs.list", async (raw: unknown) => {
     lastUsedAt = Date.now();
@@ -870,6 +986,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     const startedAt = Date.now();
     try {
       const threadId = threadIdOf(raw);
+      hostFrom(raw, threadId);
       await inBudget(summarizer.request(threadId), startedAt, `ask for a summary of ${threadId.slice(0, 8)}`);
       return { queued: true };
     } catch (error) {
@@ -903,6 +1020,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
   ctx.handle("refs.seenForThread", async (raw: unknown) => {
     try {
       const threadId = threadIdOf(raw);
+      hostFrom(raw, threadId);
       const { result } = await updateIndex(refs, (draft) => markSeenForThread(draft, threadId));
       return clean({ ok: true, keys: result });
     } catch (error) {
@@ -915,6 +1033,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     try {
       lastUsedAt = Date.now();
       const threadId = threadIdOf(raw);
+      const hostId = hostFrom(raw, threadId);
       const passage = text(raw, "text");
       if (!passage.trim()) throw new MainlineError("INVALID_ARGUMENT", "text is required");
       const turn = isRecord(raw) && typeof raw.turn === "number" && Number.isSafeInteger(raw.turn) && raw.turn > 0 ? raw.turn : undefined;
@@ -924,6 +1043,7 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       const title = titleOf(threadId);
       const result = await favorites.add({
         threadId,
+        ...(hostId ? { hostId } : {}),
         text: passage,
         source: "select",
         ...(turn ? { turn } : {}),
@@ -947,7 +1067,11 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       const offset = Math.min(count(raw, "offset", 0), matched.length);
       const limit = Math.max(1, Math.min(count(raw, "limit", FAVORITES_PAGE), FAVORITES_PAGE_MAX));
       const titleFor = (item: Favorite) => titleOf(item.threadId) ?? item.threadTitle;
-      const page = matched.slice(offset, offset + limit).map(excerptOf);
+      // A passage of a conversation on another computer names its host: codexhost Web opens it by it.
+      const page = matched.slice(offset, offset + limit).map((item) => {
+        const hostId = item.hostId ?? hostOf(item.threadId);
+        return excerptOf(hostId && !item.hostId ? { ...item, hostId } : item);
+      });
       // Fewer when they would not fit: the next page starts where this one stops.
       const items = page.slice(0, Math.max(Math.min(page.length, 1), fitting(page, byteSize({ items: [], titles: {}, total: file.items.length, matched: matched.length, nextOffset: matched.length }), (item) => byteSize(item) + byteSize(titleFor(item) ?? "") + byteSize(item.threadId) + 2)));
       const titles: Record<string, string> = {};
@@ -995,7 +1119,8 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       const favorite = (await favorites.current()).items.find((item) => item.id === id);
       if (!favorite) throw new MainlineError("UNKNOWN_ITEM", "No such saved passage");
       reveal = { id: favorite.id, threadId: favorite.threadId, text: favorite.text, at: Date.now() };
-      return clean({ threadId: favorite.threadId });
+      const hostId = favorite.hostId ?? hostOf(favorite.threadId);
+      return clean({ threadId: favorite.threadId, ...(hostId ? { hostId } : {}) });
     } catch (error) {
       rethrow(error);
     }
@@ -1079,8 +1204,20 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
   } catch (error) {
     log.error("delete copies earlier versions left behind", error);
   }
+  // Which conversations run on other computers, as the mainlines, the link index and the saved passages say.
+  try {
+    const [state, index, saved] = [await currentState(), await currentIndex(), await favorites.current()];
+    remote.seed([
+      ...Object.values(state.conversations).map((conversation) => [conversation.threadId, conversation.hostId] as const),
+      ...Object.entries(index.threads).map(([threadId, record]) => [threadId, record.hostId] as const),
+      ...saved.items.map((item) => [item.threadId, item.hostId] as const),
+    ]);
+  } catch (error) {
+    log.error("find the conversations on other computers", error);
+  }
   scanner.start(3000);
   summarizer.start();
+  remote.start(REMOTE_FIRST_MS);
   let githubTimer: ReturnType<typeof setTimeout> | undefined;
   /** The GitHub round under way, which stopping waits for (briefly). */
   let githubRound: Promise<void> | undefined;
@@ -1121,8 +1258,9 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     stopping.abort(new StoppedError());
     const scanned = scanner.stop();
     const summarized = summarizer.stop();
+    const listed = remote.stop();
     // What the scanner held back, and what a summarizer round found, are written before the backend goes.
-    const settled = Promise.allSettled([maintaining, githubRound, ...lookups, favorites.settle(), scanned, summarized, ...opening.values()]);
+    const settled = Promise.allSettled([maintaining, githubRound, ...lookups, favorites.settle(), scanned, summarized, listed, ...opening.values()]);
     await within(settled, STOP_WAIT_MS).catch(() => undefined);
     await within(fileLog.flush(), 100).catch(() => undefined);
   };

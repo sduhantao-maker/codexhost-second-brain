@@ -2,6 +2,7 @@
  * Favorites: passages the user wants to find again, saved from a conversation with where they came
  * from. Plain data and pure functions; the store, the backend and the surfaces use them.
  */
+import { isRemoteHostId } from "./hosts.js";
 import { isThreadId, MainlineError, newId } from "./model.js";
 
 export const FAVORITES_VERSION = 1;
@@ -13,6 +14,8 @@ export type FavoriteRole = "agent" | "user";
 export interface Favorite {
   id: string;
   threadId: string;
+  /** The remote host the conversation runs on, when it is on another computer (`remote-peer:…`). */
+  hostId?: string;
   /** The saved passage, as it was. */
   text: string;
   /** Who said it, when known. */
@@ -99,6 +102,7 @@ function readFavorite(value: unknown): Favorite | undefined {
   return {
     id: value.id,
     threadId: value.threadId,
+    ...(isRemoteHostId(value.hostId) ? { hostId: value.hostId } : {}),
     text: clip(value.text, FAVORITE_LIMITS.text),
     ...(value.role === "agent" || value.role === "user" ? { role: value.role } : {}),
     ...(typeof value.turn === "number" && Number.isSafeInteger(value.turn) && value.turn > 0 ? { turn: value.turn } : {}),
@@ -119,6 +123,7 @@ export function normalizeFavorites(raw: unknown): FavoritesFile {
 
 export interface NewFavorite {
   threadId: string;
+  hostId?: string;
   text: string;
   role?: FavoriteRole;
   turn?: number;
@@ -135,11 +140,15 @@ export function addFavorite(file: FavoritesFile, input: NewFavorite, now: number
   const text = cleanPassage(input.text);
   if (!text) throw new MainlineError("EMPTY_TEXT", "Nothing to save");
   const existing = file.items.find((item) => item.threadId === input.threadId && flatten(item.text) === flatten(text));
-  if (existing) return { favorite: existing, added: false };
+  if (existing) {
+    if (!existing.hostId && isRemoteHostId(input.hostId)) existing.hostId = input.hostId;
+    return { favorite: existing, added: false };
+  }
   const taken = new Set(file.items.map(({ id }) => id));
   const favorite: Favorite = {
     id: newId((id) => taken.has(id), 6, random),
     threadId: input.threadId,
+    ...(isRemoteHostId(input.hostId) ? { hostId: input.hostId } : {}),
     text: clip(text, FAVORITE_LIMITS.text),
     ...(input.role ? { role: input.role } : {}),
     ...(input.turn && Number.isSafeInteger(input.turn) && input.turn > 0 ? { turn: input.turn } : {}),

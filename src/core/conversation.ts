@@ -3,6 +3,7 @@
  * milestones (stage achievements), and under each milestone the tasks done on the way to it.
  * Problems that branch off become child conversations. See docs/superpowers/specs/*-v2-design.md.
  */
+import { isRemoteHostId } from "./hosts.js";
 import { cleanText, isThreadId, normalizeState, type Locale, type Stamp, type State } from "./model.js";
 
 export const STATE_V2 = 2;
@@ -62,6 +63,11 @@ export interface Conversation {
   relatedTo?: string;
   /** The conversation that delegated this one, as codexhost reports it. */
   parentId?: string;
+  /**
+   * The computer the conversation runs on, when it is not this one: a paired remote host's id
+   * (`remote-peer:…`), which every read of the conversation carries. None for a local conversation.
+   */
+  hostId?: string;
   /** Parts the user edited by hand; the model summary leaves them alone. */
   pinned?: Partial<Record<PinnedField, true>>;
   /** Milestones the user removed; model summaries do not bring them back. */
@@ -222,6 +228,7 @@ function readConversation(threadId: string, value: unknown): Conversation | unde
   if (now) conversation.now = now;
   if (isThreadId(value.relatedTo) && value.relatedTo !== threadId) conversation.relatedTo = value.relatedTo;
   if (isThreadId(value.parentId) && value.parentId !== threadId) conversation.parentId = value.parentId;
+  if (isRemoteHostId(value.hostId)) conversation.hostId = value.hostId;
   if (isRecord(value.pinned)) {
     const pinned: Partial<Record<PinnedField, true>> = {};
     for (const field of PINNED_FIELDS) if (value.pinned[field] === true) pinned[field] = true;

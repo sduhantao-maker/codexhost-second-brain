@@ -101,7 +101,12 @@ var ERROR_CODES = [
   /** A data file was written by a newer version of the extension: it is left as it is. */
   "NEWER_VERSION",
   /** codexhost has not answered in time: the child conversation may still open in the background. */
-  "PENDING"
+  "PENDING",
+  /**
+   * Files sent along with a child conversation on another computer (a remote host): it opens there,
+   * and that computer cannot read the files kept on this one.
+   */
+  "REMOTE_ATTACHMENTS"
 ];
 function isErrorCode(value) {
   return typeof value === "string" && ERROR_CODES.includes(value);
@@ -109,9 +114,13 @@ function isErrorCode(value) {
 var LETTERS = "abcdefghijklmnopqrstuvwxyz";
 var ALPHANUMERIC = `${LETTERS}0123456789`;
 var THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,255}$/u;
+var DRAFT_ID = /^(?:draft-|client-new-thread:)/u;
 var OBJECT_KEYS = /* @__PURE__ */ new Set(["constructor", "prototype", "toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable"]);
+function isDraftId(value) {
+  return typeof value === "string" && DRAFT_ID.test(value);
+}
 function isThreadId(value) {
-  return typeof value === "string" && THREAD_ID.test(value) && !OBJECT_KEYS.has(value);
+  return typeof value === "string" && THREAD_ID.test(value) && !OBJECT_KEYS.has(value) && !isDraftId(value);
 }
 var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var isTime = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -182,6 +191,19 @@ function normalizeState(raw) {
 }
 function localeOf(value) {
   return typeof value === "string" && value.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+}
+
+// src/core/hosts.ts
+var REMOTE_HOST_ID = /^remote-peer:[a-zA-Z0-9_-]{1,64}$/u;
+function isRemoteHostId(value) {
+  return typeof value === "string" && REMOTE_HOST_ID.test(value);
+}
+var WEB_REMOTE = "web-remote:";
+function webSessionId(threadId, hostId) {
+  if (!isRemoteHostId(hostId)) return threadId;
+  const bytes = new TextEncoder().encode(JSON.stringify([hostId, threadId]));
+  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
+  return `${WEB_REMOTE}${btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "")}`;
 }
 
 // src/core/conversation.ts
@@ -286,6 +308,7 @@ function readConversation(threadId, value) {
   if (now) conversation.now = now;
   if (isThreadId(value.relatedTo) && value.relatedTo !== threadId) conversation.relatedTo = value.relatedTo;
   if (isThreadId(value.parentId) && value.parentId !== threadId) conversation.parentId = value.parentId;
+  if (isRemoteHostId(value.hostId)) conversation.hostId = value.hostId;
   if (isRecord2(value.pinned)) {
     const pinned = {};
     for (const field of PINNED_FIELDS) if (value.pinned[field] === true) pinned[field] = true;
@@ -750,7 +773,8 @@ var ZH_ERRORS = {
   NO_SUMMARIZER: () => "\u8FD9\u4E2A\u5BF9\u8BDD\u6765\u81EA Claude Code \u548C Codex \u4EE5\u5916\u7684 Agent\u3002\u8BBE\u7F6E\u91CC\u300C\u5176\u4ED6 Agent\uFF08\u5982 pi\u3001DeepSeek\u3001Grok\uFF09\u7684\u5BF9\u8BDD\u300D\u9009\u7684\u662F\u300C\u4E0D\u51DD\u7EC3\uFF0C\u4E0D\u53D1\u7ED9\u4EFB\u4F55\u6A21\u578B\u300D\uFF0C\u6240\u4EE5\u4E0D\u4F1A\u53D1\u7ED9\u6A21\u578B\uFF1B\u8981\u51DD\u7EC3\uFF0C\u8BF7\u5148\u5728\u300C\u8BBE\u7F6E\u300D\u9875\u7B7E\u4E3A\u5B83\u4EEC\u9009\u4E00\u4E2A\u6A21\u578B\u3002",
   UNAVAILABLE: (detail2) => `\u6539\u4E0D\u4E86 Agent \u534F\u4F5C\uFF1A${detail2}`,
   NEWER_VERSION: () => "\u6570\u636E\u6587\u4EF6\u662F\u66F4\u65B0\u7248\u672C\u7684\u7B2C\u4E8C\u5927\u8111\u63D2\u4EF6\u5199\u7684\uFF0C\u8FD9\u91CC\u6CA1\u6709\u6539\u52A8\u5B83\uFF1B\u8BF7\u66F4\u65B0\u63D2\u4EF6",
-  PENDING: () => "codexhost \u6CA1\u6709\u53CA\u65F6\u7B54\u590D\uFF0C\u5B50\u5BF9\u8BDD\u53EF\u80FD\u8FD8\u5728\u6253\u5F00\uFF1A\u5F00\u597D\u540E\u4F1A\u51FA\u73B0\u5728\u672C\u5BF9\u8BDD\u4E0B\u65B9\uFF0C\u5148\u4E0D\u8981\u518D\u70B9"
+  PENDING: () => "codexhost \u6CA1\u6709\u53CA\u65F6\u7B54\u590D\uFF0C\u5B50\u5BF9\u8BDD\u53EF\u80FD\u8FD8\u5728\u6253\u5F00\uFF1A\u5F00\u597D\u540E\u4F1A\u51FA\u73B0\u5728\u672C\u5BF9\u8BDD\u4E0B\u65B9\uFF0C\u5148\u4E0D\u8981\u518D\u70B9",
+  REMOTE_ATTACHMENTS: () => "\u8FD9\u4E2A\u5BF9\u8BDD\u5728\u53E6\u4E00\u53F0\u7535\u8111\u4E0A\uFF0C\u5B50\u5BF9\u8BDD\u4E5F\u5F00\u5728\u90A3\u91CC\uFF0C\u90A3\u53F0\u7535\u8111\u8BFB\u4E0D\u5230\u672C\u673A\u7684\u6587\u4EF6\uFF1A\u5F00\u5B50\u5BF9\u8BDD\u65F6\u4E0D\u80FD\u9644\u5E26\u7167\u7247\u3001\u6587\u4EF6\u6216\u89C6\u9891"
 };
 var EN_ERRORS = {
   INVALID_ARGUMENT: (detail2) => `Not accepted: ${detail2}`,
@@ -773,7 +797,8 @@ var EN_ERRORS = {
   NO_SUMMARIZER: () => "This conversation is run by an agent other than Claude Code and Codex, and the setting \u201CConversations of other agents (pi, DeepSeek, Grok, \u2026)\u201D is \u201CDo not summarize; send them to no model\u201D, so it is not sent to a model. To summarize it, choose a model for them in the Settings tab first.",
   UNAVAILABLE: (detail2) => `The agent integration cannot be changed: ${detail2}`,
   NEWER_VERSION: () => "A data file was written by a newer version of Second Brain and was left as it is; update the extension",
-  PENDING: () => "No answer from codexhost yet; the child may still open under this conversation"
+  PENDING: () => "No answer from codexhost yet; the child may still open under this conversation",
+  REMOTE_ATTACHMENTS: () => "This conversation is on another computer, where the child opens too, and that computer cannot read files on this one: no photos, files or videos can go along"
 };
 var AGENT_FILES = {
   claude: { name: "Claude Code", folder: "~/.claude", file: "settings.json" },
@@ -1516,6 +1541,7 @@ var OverviewPage = class {
       state,
       info: readInfo(result.info),
       parents: readParents(result.parents),
+      hosts: readHosts(result.hosts),
       version: String(result.version),
       ...typeof result.command === "string" && result.command ? { command: result.command } : {},
       ...readSummarizer(result.summarizer),
@@ -1538,7 +1564,7 @@ var OverviewPage = class {
     }
     this.#viewLoading.add(threadId);
     try {
-      const view = await this.#api.backend.invoke("conversation", { threadId });
+      const view = await this.#api.backend.invoke("conversation", { threadId, ...this.#onHost(threadId) });
       if (isView(view, threadId)) {
         this.#views.set(threadId, view);
         if (this.#expanded.has(threadId)) this.#render();
@@ -1653,7 +1679,12 @@ var OverviewPage = class {
     return true;
   }
   #mutate(params, focus) {
-    return this.#act(() => this.#api.backend.invoke("mutate", params), focus);
+    return this.#act(() => this.#api.backend.invoke("mutate", { ...params, ...this.#onHost(params.threadId) }), focus);
+  }
+  /** The `hostId` a call names a conversation's remote host by, when it is on another computer; nothing for a local one. */
+  #onHost(threadId) {
+    const hostId = this.#data?.hosts[threadId] ?? this.#data?.state.conversations[threadId]?.hostId;
+    return hostId && isRemoteHostId(hostId) ? { hostId } : {};
   }
   async #spawn(threadId, spinoff, focus) {
     const key = `${threadId}:${spinoff.id}`;
@@ -1663,15 +1694,16 @@ var OverviewPage = class {
     const opened = {};
     const ok = await this.#act(async () => {
       try {
-        const result = await this.#api.backend.invoke("spawn", { threadId, spinoffId: spinoff.id });
+        const result = await this.#api.backend.invoke("spawn", { threadId, spinoffId: spinoff.id, ...this.#onHost(threadId) });
         if (typeof result?.childThreadId === "string" && result.childThreadId) opened.child = result.childThreadId;
+        if (isRemoteHostId(result?.hostId)) opened.host = result.hostId;
       } catch (error) {
         if (errorCodeOf(error) !== "PENDING") throw error;
         opened.pending = this.#message(error);
       }
     }, focus);
     this.#spawning.delete(key);
-    if (ok) this.#showNotice(opened.pending ?? this.#t.spawnedNotice(spinoff.text), opened.child);
+    if (ok) this.#showNotice(opened.pending ?? this.#t.spawnedNotice(spinoff.text), opened.child, opened.host);
     this.#render(true);
   }
   async #saveSettings(patch) {
@@ -1720,8 +1752,13 @@ var OverviewPage = class {
     const opener = this.#preview?.opener;
     return [...opener ? [opener] : [], `integration:${agent}:preview`, `integration:${agent}:install`, `integration:${agent}:uninstall`];
   }
-  #openThread(threadId) {
-    const detail2 = { threadId };
+  /**
+   * Opens a conversation in the surface the page runs in. One on another computer names its remote
+   * host (`hostId`, else what the snapshot says); codexhost Web opens it by its `web-remote:` session.
+   */
+  #openThread(threadId, hostId = this.#onHost(threadId).hostId) {
+    const host = isRemoteHostId(hostId) ? hostId : void 0;
+    const detail2 = { threadId, ...host ? { hostId: host } : {} };
     const view = this.#doc.defaultView;
     view?.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: detail2 }));
     detail2.result?.catch((error) => {
@@ -1731,12 +1768,12 @@ var OverviewPage = class {
     });
     if (detail2.handled || this.#api.hostTarget !== "web" || !view) return;
     const url = new URL(view.location.href);
-    url.searchParams.set("session", threadId);
+    url.searchParams.set("session", webSessionId(threadId, host));
     view.location.assign(url.href);
   }
-  #showNotice(text, threadId) {
+  #showNotice(text, threadId, hostId) {
     clearTimeout(this.#noticeTimer);
-    this.#notice = { text, ...threadId ? { threadId } : {} };
+    this.#notice = { text, ...threadId ? { threadId } : {}, ...hostId ? { hostId } : {} };
     this.#renderMessages();
     this.#noticeTimer = setTimeout(() => this.#clearNotice(), NOTICE_MS);
   }
@@ -1861,7 +1898,7 @@ var OverviewPage = class {
         result.draft ? h("span", { class: "mlp-badge mlp-draft", text: t.draft }) : this.#statusBadge(result.status),
         h("span", { class: "mlp-spacer" }),
         h("span", { class: "mlp-meta mlp-live", text: t.threadStatus[status] }),
-        this.#button(t.jump, () => this.#openThread(result.threadId), "mlp-btn-sm")
+        this.#button(t.jump, () => this.#openThread(result.threadId, result.hostId ?? this.#onHost(result.threadId).hostId), "mlp-btn-sm")
       ),
       result.tags.length ? this.#tags(result.tags) : null,
       h(
@@ -1977,7 +2014,7 @@ var OverviewPage = class {
           "div",
           { class: "mlp-notice", attrs: { role: "status" } },
           h("span", { class: "mlp-main", text: notice.text }),
-          child ? this.#button(t.jump, () => this.#openThread(child), "mlp-btn-sm") : null,
+          child ? this.#button(t.jump, () => this.#openThread(child, notice.hostId ?? this.#onHost(child).hostId), "mlp-btn-sm") : null,
           this.#iconButton("close", t.close, () => this.#clearNotice())
         )
       );
@@ -2789,7 +2826,8 @@ var OverviewPage = class {
   async #revealFavorite(item) {
     try {
       const result = await this.#api.backend.invoke("favorites.reveal", { id: item.id });
-      this.#openThread(typeof result?.threadId === "string" ? result.threadId : item.threadId);
+      const hostId = result?.hostId;
+      this.#openThread(typeof result?.threadId === "string" ? result.threadId : item.threadId, isRemoteHostId(hostId) ? hostId : item.hostId);
     } catch (error) {
       this.#error = { kind: "action", text: this.#message(error) };
       this.#render(true);
@@ -2903,7 +2941,7 @@ var OverviewPage = class {
       t.jump,
       () => {
         if (unseen) void this.#api.backend.invoke("refs.seen", { key: ref.key }).then(() => this.#loadRefs());
-        this.#openThread(origin.threadId);
+        this.#openThread(origin.threadId, origin.hostId ?? this.#onHost(origin.threadId).hostId);
       },
       "",
       `ref-jump:${ref.key}`
@@ -3148,7 +3186,7 @@ var OverviewPage = class {
     if (await this.#act(() => this.#api.backend.invoke("summarize.cancel"), ["confirm:backfill:start", "backfill:stop", "tab:settings"])) this.#showNotice(this.#t.backfillStopped);
   }
   async #summarize(threadId) {
-    if (await this.#act(() => this.#api.backend.invoke("summarize", { threadId }))) this.#showNotice(this.#t.summarizeQueued);
+    if (await this.#act(() => this.#api.backend.invoke("summarize", { threadId, ...this.#onHost(threadId) }))) this.#showNotice(this.#t.summarizeQueued);
   }
   /** "You changed … by hand", with the way back to automatic summaries. */
   #pinnedNote(view) {
@@ -3216,6 +3254,13 @@ function readInfo(value) {
     };
   }
   return info;
+}
+function readHosts(value) {
+  const hosts = {};
+  if (isRecord3(value)) {
+    for (const [threadId, hostId] of Object.entries(value)) if (isThreadId(threadId) && isRemoteHostId(hostId)) hosts[threadId] = hostId;
+  }
+  return hosts;
 }
 function readParents(value) {
   const parents = {};

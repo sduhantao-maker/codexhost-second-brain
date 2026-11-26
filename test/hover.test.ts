@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationView, MilestoneView } from "../src/core/conversation-view.js";
 import type { RefView } from "../src/core/refs.js";
 import type { ControllerHandle, LiveData, SurfaceAdapter } from "../src/ui/controller.js";
-import { HIDE_DELAY_MS, HOST_ATTRIBUTE, PREFETCH_DELAY_MS, REBIND_MS, SHOW_DELAY_MS, startHover } from "../src/ui/hover/index.js";
+import { HIDE_DELAY_MS, HOST_ATTRIBUTE, PREFETCH_DELAY_MS, PREVIEW_CSS, REBIND_MS, SHOW_DELAY_MS, startHover, SUPPRESS_ATTRIBUTE } from "../src/ui/hover/index.js";
 import { badgeSpot, cardSpot, hostContent, inSight, newsBadgeSpot, summarySpot, type Box } from "../src/ui/hover/layout.js";
 import { NOW, T, ref42, sampleSnapshot, sampleView } from "./fixtures/v2.js";
 
@@ -128,9 +128,12 @@ function setup() {
     rowAt(target) {
       const row = target instanceof Element ? target.closest<HTMLElement>("[data-thread]") : null;
       const threadId = row?.getAttribute("data-thread");
-      return row && threadId ? { element: row, threadId } : null;
+      // A conversation on another computer: its row names its host, as codexhost Web's row key does.
+      const hostId = row?.getAttribute("data-host");
+      return row && threadId ? { element: row, threadId, ...(hostId ? { hostId } : {}) } : null;
     },
     rowsFor: (threadId) => (rows[threadId] ? [rows[threadId]!] : []),
+    hostOf: (threadId) => rows[threadId]?.getAttribute("data-host") ?? undefined,
   };
   const stop = startHover(adapter, controller);
   const publish = (version: string, data?: Partial<LiveData>) => {
@@ -405,6 +408,8 @@ describe("sidebar hover card", () => {
     move(card(), env.content);
     await wait(HIDE_DELAY_MS);
     expect(cardShown()).toBe(false);
+    // Placing the card never changes the host element’s display.
+    expect(preview.style.getPropertyValue("display")).toBe("");
     // Another row with no preview beside it: back to the sidebar's edge.
     move(null, env.titleOf(T.child));
     await wait(SHOW_DELAY_MS);
@@ -1074,6 +1079,261 @@ describe("sidebar hover card", () => {
     await wait(SHOW_DELAY_MS);
     expect(host()).toBeNull();
     expect(env.calls(T.child)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The host's own preview of a row: hidden while the card shows instead, and only then.
+
+/** A host element whose box the browser would report: none while it or an ancestor is not displayed. */
+function drawn(element: HTMLElement, rect: Rect) {
+  Object.defineProperty(element, "getBoundingClientRect", {
+    configurable: true,
+    value: () => {
+      for (let node: Element | null = element; node; node = node.parentElement)
+        if (getComputedStyle(node).display === "none") return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}) };
+      const { left, top, width, height } = rect;
+      return { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) };
+    },
+  });
+}
+
+/** codexhost Web's preview: a fixed child of body, its class names hashes, marked by an inline custom property. */
+function webPreview(): HTMLElement {
+  const preview = document.createElement("div");
+  preview.className = "_card_1a2b3 _copyable_4c5d6";
+  preview.setAttribute("role", "button");
+  preview.setAttribute("tabindex", "0");
+  preview.setAttribute("aria-label", "复制会话名称");
+  preview.setAttribute("style", `position: fixed; left: ${SIDEBAR_WIDTH - 4}px; top: ${ROW_TOP}px; --dsh-hover-preview-fade: 100ms;`);
+  const content = document.createElement("div");
+  content.className = "_hoverContent_7e8f9";
+  content.textContent = "Row 0";
+  preview.append(content);
+  drawn(preview, { left: SIDEBAR_WIDTH - 4, top: ROW_TOP, width: 244, height: 196 });
+  return preview;
+}
+
+/** Whether the extension's rule for the host's previews (PREVIEW_CSS) applies to an element now. */
+const hiddenByRule = (element: Element) => element.matches(PREVIEW_CSS.slice(0, PREVIEW_CSS.indexOf("{")));
+
+/**
+ * Codex Desktop 26.1120's preview: an empty popover whose id ends in -hover-card, drawn by a fixed
+ * child. (jsdom has no Popover API, and its own style sheet hides every popover; the drawn child's
+ * box follows the extension's rule instead, as Chromium draws it.)
+ */
+function desktopPreview(): { popover: HTMLElement; part: HTMLElement } {
+  const popover = document.createElement("div");
+  popover.id = "r5-hover-card";
+  popover.setAttribute("role", "dialog");
+  popover.setAttribute("aria-label", "聊天预览");
+  popover.setAttribute("popover", "hint");
+  popover.className = "anchorHost-x1";
+  box(popover, { left: 0, top: 0, width: 0, height: 0 });
+  const part = document.createElement("div");
+  part.setAttribute("data-placement", "inline-end-start");
+  part.setAttribute("data-anchor-positioning", "native");
+  part.style.position = "fixed";
+  Object.defineProperty(part, "getBoundingClientRect", {
+    configurable: true,
+    value: () => {
+      const [left, top, width, height] = hiddenByRule(popover) ? [0, 0, 0, 0] : [SIDEBAR_WIDTH - 2, ROW_TOP, 320, 59];
+      return { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) };
+    },
+  });
+  popover.append(part);
+  return { popover, part };
+}
+
+const suppressed = () => document.documentElement.hasAttribute(SUPPRESS_ATTRIBUTE);
+const shownByHost = (element: Element) => getComputedStyle(element).display !== "none";
+
+describe("the host's own preview of the row", () => {
+  it("on codexhost Web: does not show from the moment the pointer rests on a conversation row until the card goes, then shows as before", async () => {
+    const preview = webPreview();
+    document.body.append(preview);
+    expect(shownByHost(preview)).toBe(true);
+    expect(hiddenByRule(preview)).toBe(false);
+    move(null, env.titleOf(T.main));
+    // The card is about to show for this row: the preview does not show first.
+    expect(suppressed()).toBe(true);
+    expect(shownByHost(preview)).toBe(false);
+    await wait(SHOW_DELAY_MS);
+    expect(cardShown()).toBe(true);
+    expect(shownByHost(preview)).toBe(false);
+    // Nothing to make room for: the card sits at the sidebar's edge.
+    expect(card()!.style.left).toBe(`${SIDEBAR_WIDTH + 8}px`);
+    expect(card()!.hasAttribute("data-beside")).toBe(false);
+    move(env.titleOf(T.main), card());
+    await wait(HIDE_DELAY_MS * 2);
+    expect(shownByHost(preview)).toBe(false);
+    move(card(), env.content);
+    await wait(HIDE_DELAY_MS);
+    expect(cardShown()).toBe(false);
+    expect(suppressed()).toBe(false);
+    expect(shownByHost(preview)).toBe(true);
+    // Its own inline style is as the host left it.
+    expect(preview.getAttribute("style")).toBe(`position: fixed; left: ${SIDEBAR_WIDTH - 4}px; top: ${ROW_TOP}px; --dsh-hover-preview-fade: 100ms;`);
+  });
+
+  it("on Codex Desktop 26.1120: the popover drawn by a fixed child does not show while the card shows, and shows again after", async () => {
+    const { popover, part } = desktopPreview();
+    env.sidebar.append(popover);
+    let open = false;
+    const query = document.querySelectorAll.bind(document);
+    // jsdom has no Popover API; stand in for :popover-open.
+    const spy = vi
+      .spyOn(document, "querySelectorAll")
+      .mockImplementation(((selector: string) => (selector === ":popover-open" ? (open ? [popover] : []) : query(selector))) as typeof document.querySelectorAll);
+    try {
+      move(null, env.titleOf(T.main));
+      // Desktop opens its preview 0.24 s after the pointer arrives.
+      await wait(240);
+      open = true;
+      popover.dispatchEvent(new Event("toggle"));
+      expect(hiddenByRule(popover)).toBe(true);
+      await wait(SHOW_DELAY_MS - 240);
+      expect(cardShown()).toBe(true);
+      expect(hiddenByRule(popover)).toBe(true);
+      expect(part.style.getPropertyValue("display")).toBe("");
+      expect([card()!.style.left, card()!.style.top]).toEqual([`${SIDEBAR_WIDTH + 8}px`, `${ROW_TOP}px`]);
+      expect(card()!.hasAttribute("data-beside")).toBe(false);
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      expect(cardShown()).toBe(false);
+      expect(hiddenByRule(popover)).toBe(false);
+      expect(part.getBoundingClientRect().width).toBe(320);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("stays as it is where the card does not show: off the conversation rows, on touch, and on a row the pointer only passes over", async () => {
+    const preview = webPreview();
+    document.body.append(preview);
+    // Sidebar space that is no conversation.
+    move(null, env.section);
+    await wait(SHOW_DELAY_MS * 2);
+    expect(suppressed()).toBe(false);
+    expect(shownByHost(preview)).toBe(true);
+    // Touch has no hover, and no card.
+    move(env.section, env.titleOf(T.main), "touch");
+    await wait(SHOW_DELAY_MS * 2);
+    expect(cardShown()).toBe(false);
+    expect(suppressed()).toBe(false);
+    move(env.titleOf(T.main), env.content, "touch");
+    // Passing over a row: hidden only while the card is about to show for it, shown again once the pointer has gone.
+    move(env.content, env.titleOf(T.child));
+    await wait(SHOW_DELAY_MS / 2);
+    move(env.titleOf(T.child), env.content);
+    expect(suppressed()).toBe(false);
+    expect(shownByHost(preview)).toBe(true);
+    await wait(SHOW_DELAY_MS * 2);
+    expect(cardShown()).toBe(false);
+    expect(shownByHost(preview)).toBe(true);
+  });
+
+  it("shows for another row the pointer is on while the card stays with its own conversation (the user typing in it)", async () => {
+    move(null, env.titleOf(T.main));
+    await wait(SHOW_DELAY_MS);
+    card()!.querySelector<HTMLButtonElement>(".compose-open")!.click();
+    const field = card()!.querySelector<HTMLInputElement>("input.compose-input")!;
+    field.value = "视频点不开";
+    field.dispatchEvent(new Event("input"));
+    move(env.titleOf(T.main), env.titleOf(T.child));
+    expect(card()!.getAttribute("data-thread")).toBe(T.main);
+    expect(suppressed()).toBe(false);
+    // Drafts and workspace headings also keep their own preview while the card is pinned.
+    move(env.titleOf(T.child), env.section);
+    await wait(HIDE_DELAY_MS * 2);
+    expect(cardShown()).toBe(true);
+    expect(suppressed()).toBe(false);
+    move(env.section, env.content);
+    expect(suppressed()).toBe(false);
+    move(env.content, card());
+    expect(suppressed()).toBe(true);
+    move(card(), env.titleOf(T.main));
+    expect(suppressed()).toBe(true);
+  });
+
+  it("keeps a fixed host menu beside the row interactive while the card is open", async () => {
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("style", "position: fixed; display: flex");
+    drawn(menu, { left: SIDEBAR_WIDTH - 4, top: ROW_TOP, width: 244, height: 196 });
+    document.body.append(menu);
+    move(null, env.titleOf(T.main));
+    await wait(SHOW_DELAY_MS);
+    expect(cardShown()).toBe(true);
+    expect(shownByHost(menu)).toBe(true);
+    expect(card()!.style.left).toBe(`${SIDEBAR_WIDTH - 4 + 244 + 8}px`);
+    env.stop();
+    expect(suppressed()).toBe(false);
+    expect(menu.style.getPropertyValue("display")).toBe("flex");
+    expect(document.querySelector("[data-codexhost-mainline-styles]")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// A conversation on another computer (codexhost Web's remote hosts).
+
+describe("a conversation on another computer", () => {
+  const HOST = "remote-peer:0d1e2f3a-aaaa-4bbb-8ccc-000000000001";
+
+  beforeEach(() => {
+    env.rows[T.main]!.setAttribute("data-host", HOST);
+    env.views[T.main] = { ...env.views[T.main]!, host: { id: HOST, name: "测试主机", state: "connected" } };
+  });
+
+  it("names its host in every call, says which computer it is on, and opens a child there without files", async () => {
+    move(null, env.titleOf(T.main));
+    await wait(SHOW_DELAY_MS);
+    expect(env.invoke).toHaveBeenCalledWith("conversation", { threadId: T.main, hostId: HOST });
+    expect(text(card(), ".head .host")).toBe("测试主机 · 已连接");
+    expect(card()!.querySelector(".head .host .dot")!.getAttribute("data-host")).toBe("connected");
+    card()!.querySelector<HTMLButtonElement>(".resummarize")!.click();
+    await wait(10);
+    expect(env.invoke).toHaveBeenCalledWith("summarize", { threadId: T.main, hostId: HOST });
+    // No files: none is offered, and dropping some says why.
+    card()!.querySelector<HTMLButtonElement>(".compose-open")!.click();
+    expect(card()!.querySelector("button.attach")).toBeNull();
+    const why = "这个对话在另一台电脑上，子对话也开在那里，那台电脑读不到本机的文件，所以不能附带照片、文件或视频";
+    expect(text(card(), ".compose-notice")).toBe(why);
+    card()!.dispatchEvent(withFiles("drop", [new File(["a,b"], "data.csv", { type: "text/csv" })], "dataTransfer"));
+    expect(card()!.querySelector(".attachment")).toBeNull();
+    expect(text(card(), ".compose-notice")).toBe(why);
+    const field = card()!.querySelector<HTMLInputElement>("input.compose-input")!;
+    field.value = "脚本在新机器上跑不起来";
+    field.dispatchEvent(new Event("input"));
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    card()!.querySelector<HTMLButtonElement>('[data-spawn="new"]')!.click();
+    await wait(10);
+    expect(env.uploads).toEqual([]);
+    expect(env.spawned).toEqual([{ threadId: T.main, text: "脚本在新机器上跑不起来", hostId: HOST }]);
+    // The child opened on the same computer: opening it names that host.
+    card()!.querySelector<HTMLButtonElement>(".compose-result .btn")!.click();
+    expect(env.openThread).toHaveBeenCalledWith("kid-1", HOST);
+  });
+
+  it("opens its child conversations by their host", async () => {
+    const view = env.views[T.main]!;
+    env.views[T.main] = { ...view, children: view.children.map((child) => ({ ...child, hostId: HOST })) };
+    move(null, env.titleOf(T.main));
+    await wait(SHOW_DELAY_MS);
+    move(env.titleOf(T.main), card());
+    card()!.querySelector<HTMLButtonElement>('[data-section="children"] button.child')!.click();
+    expect(env.openThread).toHaveBeenLastCalledWith(T.child, HOST);
+  });
+
+  it("says when its computer is not connected, and names none for a local conversation", async () => {
+    env.views[T.main] = { ...env.views[T.main]!, host: { id: HOST, state: "offline" } };
+    move(null, env.titleOf(T.main));
+    await wait(SHOW_DELAY_MS);
+    expect(text(card(), ".head .host")).toBe("另一台电脑 · 离线");
+    move(env.titleOf(T.main), env.titleOf(T.child));
+    await wait(10);
+    expect(env.invoke).toHaveBeenCalledWith("conversation", { threadId: T.child });
+    expect(card()!.querySelector(".head .host")).toBeNull();
+    expect(card()!.querySelector(".compose")).not.toBeNull();
   });
 });
 

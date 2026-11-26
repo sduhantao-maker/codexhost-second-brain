@@ -19,6 +19,7 @@ import {
   type SummaryRecord,
   type Task,
 } from "./conversation.js";
+import { isRemoteHostId } from "./hosts.js";
 import { cleanText, isThreadId, MainlineError, newId, requestOf, type Locale } from "./model.js";
 import { maskSecrets } from "./redact.js";
 
@@ -499,6 +500,23 @@ export function noteParents(state: StateV2, parents: ReadonlyMap<string, string>
     const conversation = recordOf(state, child);
     if (conversation && isThreadId(parent) && parent !== child && conversation.parentId !== parent) {
       conversation.parentId = parent;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * Writes the remote host each conversation runs on into its record, where the backend learned it
+ * (from codexhost Web's sidebar or a host's list), so that it is read on that host after a restart
+ * too. Anything that is no remote host id is left out. Returns whether anything changed.
+ */
+export function noteHosts(state: StateV2, hosts: Iterable<readonly [string, string]>): boolean {
+  let changed = false;
+  for (const [threadId, hostId] of hosts) {
+    const conversation = recordOf(state, threadId);
+    if (conversation && isRemoteHostId(hostId) && conversation.hostId !== hostId) {
+      conversation.hostId = hostId;
       changed = true;
     }
   }

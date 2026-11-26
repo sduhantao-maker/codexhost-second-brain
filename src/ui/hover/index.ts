@@ -16,14 +16,24 @@
  * Opening or switching conversations any other way leaves it. News whose conversation has no row
  * in sight here (in a collapsed group, scrolled away, not listed) is counted in one button at the
  * top of the sidebar, "🔔 N", which opens a list of it.
+ *
+ * While the card shows (or is about to, for the row under the pointer), the host's own preview of
+ * the row is hidden: an attribute on the document root switches on a style rule for codexhost Web's
+ * and Codex Desktop's previews (PREVIEW_CSS). For other nearby popups the card makes room.
+ * Geometry alone cannot distinguish a preview from an interactive menu.
+ *
+ * A conversation on another computer (codexhost Web shows those of the remote hosts paired with
+ * it) is named with its host in every call; its card says which computer and whether it is
+ * connected, and a child conversation opened from it opens there, without files: that computer
+ * cannot read the files kept on this one.
  */
 import { ATTACH_MAX_FILE_BYTES, ATTACH_MAX_FILES, ATTACH_MAX_TOTAL_BYTES, attachmentKind, formatSize } from "../../core/attachments.js";
 import type { ConversationView } from "../../core/conversation-view.js";
 import { cleanText, isErrorCode } from "../../core/model.js";
 import type { RefView } from "../../core/refs.js";
 import { errorCodeOf, type ConversationParams } from "../../core/rpc.js";
-import type { ControllerHandle, LiveData, SurfaceAdapter } from "../controller.js";
-import { adoptStyles, builder, type Builder } from "../dom.js";
+import { hostParams, type ControllerHandle, type LiveData, type SurfaceAdapter } from "../controller.js";
+import { adoptStyles, builder, documentStyles, type Builder } from "../dom.js";
 import { errorDetail, strings } from "../i18n.js";
 import { detectScheme } from "../theme.js";
 import { cardNodes, COMPOSE_IDLE, type CardActions, type CardContent, type ComposeState, type Expandable, type PendingFile, type SpawnTarget } from "./card.js";
@@ -78,6 +88,20 @@ const LIST_GAP = 6;
 const WINDOW_BUTTONS: Box = { left: 0, top: 0, right: 84, bottom: 44, width: 84, height: 44 };
 /** The extension's own overlays: the capsule, this one and the ★ button. */
 const OVERLAYS = "[data-codexhost-mainline], [data-codexhost-mainline-hover], [data-codexhost-mainline-favorites]";
+/**
+ * On the document root while the card shows, or is about to show, for the conversation row under the
+ * pointer: the host's own preview of that row stays hidden meanwhile (PREVIEW_CSS).
+ */
+export const SUPPRESS_ATTRIBUTE = "data-codexhost-mainline-card";
+/**
+ * The host's own previews of a sidebar row: codexhost Web's, a fixed child of body whose inline style
+ * sets `--dsh-hover-preview-fade` (its class names are hashes that change); Codex Desktop's (as seen
+ * in 26.1120), a `popover` element whose id ends in `-hover-card`, drawn by a fixed child of it.
+ */
+export const PREVIEW_CSS = `:root[${SUPPRESS_ATTRIBUTE}] body > [style*="--dsh-hover-preview-fade"],
+:root[${SUPPRESS_ATTRIBUTE}] [popover][id$="-hover-card"] {
+  display: none !important;
+}`;
 
 /** A value for an attribute selector in double quotes. */
 const quoted = (value: string) => value.replace(/["\\]/gu, "\\$&");
@@ -96,6 +120,8 @@ function pastedName(file: File, next: () => number): string {
 interface Row {
   element: HTMLElement;
   threadId: string;
+  /** Its remote host, for a conversation on another computer. */
+  hostId?: string;
   /** Where the row was when last measured; the host may swap the element for a new one meanwhile. */
   box: Box;
   /** Its conversation's bell was in sight as the pointer came onto the row (it hides while the row is hovered). */
@@ -185,9 +211,15 @@ class SidebarHover {
   readonly #expanded = new Set<Expandable>();
   /** What the card shows now, to skip rebuilding it when nothing changed. */
   #rendered: { threadId: string; key: string } | null = null;
-  /** The host's own preview of the row that the card sits beside, if any. */
+  /** The host's own preview of the row that the card sits beside, if any (only where hiding it did not work). */
   #beside: { element: Element; stop: () => void } | null = null;
   #overBeside = false;
+  /** A conversation id over its row, null over the card or outside the sidebar, undefined over an unhandled sidebar row. */
+  #pointerThread: string | null | undefined = null;
+  /** Whether the host's previews are hidden now (SUPPRESS_ATTRIBUTE on the document root). */
+  #suppressing = false;
+  /** Takes PREVIEW_CSS off the page again. */
+  #removeStyles: (() => void) | undefined;
   readonly #controller: ControllerHandle;
   /** Opening a child conversation from the card. */
   #compose: ComposeState = COMPOSE_IDLE;
@@ -272,9 +304,10 @@ class SidebarHover {
     shadow.append(this.#root);
 
     this.#actions = {
-      open: (threadId) => {
+      open: (threadId, hostId) => {
         try {
-          this.#adapter.openThread(threadId);
+          if (hostId) this.#adapter.openThread(threadId, hostId);
+          else this.#adapter.openThread(threadId);
         } catch (error) {
           console.warn("[mainline] could not open the conversation", error);
         } finally {
@@ -302,6 +335,11 @@ class SidebarHover {
       },
       attach: () => {
         if (this.#compose.busy) return;
+        // A child of a conversation on another computer opens there, where files kept here cannot be read.
+        if (this.#shown && this.#remote(this.#shown.threadId)) {
+          this.#setCompose({ ...this.#compose, open: true, notice: this.#strings().remoteFiles });
+          return;
+        }
         // The window loses the focus to the picker: the card must not take that for leaving.
         this.#picking = true;
         clearTimeout(this.#pickTimer);
@@ -326,7 +364,7 @@ class SidebarHover {
         this.#summarizing.set(threadId, Date.now());
         this.#renderCard(false, true);
         void Promise.resolve()
-          .then(() => this.#adapter.invoke("summarize", { threadId }))
+          .then(() => this.#adapter.invoke("summarize", { threadId, ...this.#onHost(threadId) }))
           .catch((error: unknown) => {
             this.#summarizing.delete(threadId);
             // Another agent's conversation with no model set for those: say so, and which setting decides.
@@ -350,9 +388,11 @@ class SidebarHover {
     this.#listen(this.#card, "pointerenter", () => {
       this.#overCard = true;
       this.#cancelHide();
+      this.#suppress();
     });
     this.#listen(this.#card, "pointerleave", () => {
       this.#overCard = false;
+      this.#suppress();
       if (!this.#row) this.#scheduleHide();
     });
     // Leaving the field: catch up on what changed meanwhile, and go if the pointer has gone too.
@@ -410,6 +450,11 @@ class SidebarHover {
     const dragging = (event: Event) => {
       const transfer = (event as DragEvent).dataTransfer;
       if (!transfer || !Array.from(transfer.types ?? []).includes("Files") || this.#compose.busy) return;
+      // Not offered for a conversation on another computer: dropping them says why (#addFiles).
+      if (this.#shown && this.#remote(this.#shown.threadId)) {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       transfer.dropEffect = "copy";
       this.#cancelHide();
@@ -431,6 +476,8 @@ class SidebarHover {
     this.#listen(doc, "scroll", (event) => this.#onScroll(event), { capture: true, passive: true });
     this.#listen(this.#win, "resize", () => this.#onScroll(null));
 
+    // The host's own previews of a row stay hidden while the card shows instead (SUPPRESS_ATTRIBUTE).
+    this.#removeStyles = documentStyles(doc, PREVIEW_CSS);
     // The host may show its own preview of the row around the same time as the card: codexhost Web
     // adds it to body, Codex Desktop opens a popover (whose toggle event does not bubble, hence capture).
     const popups = new this.#win.MutationObserver(() => this.#makeRoom());
@@ -466,6 +513,12 @@ class SidebarHover {
     this.#unbindSidebar?.();
     this.#unbindSidebar = undefined;
     this.#bridge(null);
+    this.#shown = null;
+    this.#row = null;
+    this.#pointerThread = null;
+    this.#suppress();
+    this.#removeStyles?.();
+    this.#removeStyles = undefined;
     for (const stop of this.#cleanup.splice(0)) {
       try {
         stop();
@@ -538,7 +591,7 @@ class SidebarHover {
   }
 
   /** The conversation row under an event target, if any. */
-  #rowAt(target: EventTarget | null): { element: HTMLElement; threadId: string } | null {
+  #rowAt(target: EventTarget | null): { element: HTMLElement; threadId: string; hostId?: string } | null {
     try {
       return this.#adapter.rowAt?.(target) ?? null;
     } catch {
@@ -603,9 +656,23 @@ class SidebarHover {
     if (last?.threadId === threadId && Date.now() - last.at < ACTIVATED_MS) return;
     this.#activated = { threadId, at: Date.now() };
     void Promise.resolve()
-      .then(() => this.#adapter.invoke("refs.seenForThread", { threadId }))
+      .then(() => this.#adapter.invoke("refs.seenForThread", { threadId, ...this.#onHost(threadId) }))
       .then(() => this.#controller.refresh())
       .catch(() => undefined);
+  }
+
+  /**
+   * The `hostId` a call names this conversation's remote host by, when it is on another computer:
+   * its row's, else what the surface knows; nothing for a local conversation.
+   */
+  #onHost(threadId: string): { hostId?: string } {
+    const row = this.#shown?.threadId === threadId ? this.#shown : this.#row?.threadId === threadId ? this.#row : null;
+    return row?.hostId ? { hostId: row.hostId } : hostParams(this.#adapter, threadId);
+  }
+
+  /** Whether a conversation runs on another computer. */
+  #remote(threadId: string): boolean {
+    return this.#onHost(threadId).hostId !== undefined;
   }
 
   #onOver(event: Event): void {
@@ -613,7 +680,7 @@ class SidebarHover {
     if ((event as PointerEvent).pointerType === "touch") return;
     const hit = this.#rowAt(event.target);
     if (hit) this.#enterRow(hit);
-    else this.#leaveRow();
+    else this.#leaveRow(true);
   }
 
   #onOut(event: Event): void {
@@ -624,15 +691,24 @@ class SidebarHover {
     this.#leaveRow();
   }
 
-  #enterRow(found: { element: HTMLElement; threadId: string }): void {
+  #enterRow(found: { element: HTMLElement; threadId: string; hostId?: string }): void {
     this.#cancelHide();
+    this.#pointerThread = found.threadId;
     // While the user types a new problem (or one is being opened), the card stays with its conversation.
-    if (this.#shown && this.#holding() && found.threadId !== this.#shown.threadId) return;
+    if (this.#shown && this.#holding() && found.threadId !== this.#shown.threadId) {
+      // The host's preview of this other row shows as usual: the card is not about this row.
+      this.#suppress();
+      return;
+    }
     const row = this.#row;
-    if (row && row.element === found.element && row.threadId === found.threadId) return;
+    if (row && row.element === found.element && row.threadId === found.threadId) {
+      // Back on the card's own row (from another one, while the user typed): its preview hides again.
+      this.#suppress();
+      return;
+    }
     // The bell hides once the pointer is on its conversation's row: note whether it was in sight first.
     const bell = this.#bellInSight(found.threadId) || (row?.threadId === found.threadId && row.bell);
-    const hit: Row = { element: found.element, threadId: found.threadId, box: boxOf(found.element), bell };
+    const hit: Row = { element: found.element, threadId: found.threadId, box: boxOf(found.element), bell, ...(found.hostId ? { hostId: found.hostId } : {}) };
     this.#row = hit;
     clearTimeout(this.#prefetchTimer);
     this.#renderBadge();
@@ -648,16 +724,20 @@ class SidebarHover {
       this.#showTimer = undefined;
       if (this.#row === hit) this.#show(hit);
     }, SHOW_DELAY_MS);
+    // The card is about to show for this row: the host's own preview of it does not show first.
+    this.#suppress();
   }
 
-  #leaveRow(): void {
+  #leaveRow(overOtherSidebarItem = false): void {
     clearTimeout(this.#showTimer);
     this.#showTimer = undefined;
     clearTimeout(this.#prefetchTimer);
     this.#row = null;
+    this.#pointerThread = overOtherSidebarItem ? undefined : null;
     this.#badge.hidden = true;
     this.#placeMarkers();
     if (this.#shown && !this.#overCard) this.#scheduleHide();
+    this.#suppress();
   }
 
   /** Hides the card soon, unless the pointer comes back to a row or onto the card (or the host's preview beside it) first. */
@@ -689,6 +769,14 @@ class SidebarHover {
   #addFiles(list: readonly File[]): void {
     if (!this.#shown || this.#compose.busy || !list.length) return;
     const t = this.#strings();
+    // A child of a conversation on another computer opens there, where files kept here cannot be read.
+    if (this.#remote(this.#shown.threadId)) {
+      const { result: _result, ...rest } = this.#compose;
+      const opening = !rest.open;
+      this.#setCompose({ ...rest, open: true, notice: t.remoteFiles });
+      if (opening) this.#focusField();
+      return;
+    }
     const files = [...this.#compose.files];
     let total = files.reduce((sum, file) => sum + file.size, 0);
     let pasted = files.filter((file) => /^pasted-\d+\./u.test(file.name)).length;
@@ -768,7 +856,8 @@ class SidebarHover {
     if (!spinoff?.childThreadId) return;
     this.#awaiting = null;
     if (this.#shown?.threadId !== threadId || awaiting.run !== this.#uploadRun) return;
-    const opened = { ok: true as const, childThreadId: spinoff.childThreadId, title: target.text };
+    const childHost = this.#onHost(threadId).hostId;
+    const opened = { ok: true as const, childThreadId: spinoff.childThreadId, title: target.text, ...(childHost ? { hostId: childHost } : {}) };
     if ("spinoffId" in target) {
       const { result: _previous, uploading: _uploading, ...rest } = this.#compose;
       this.#compose = { ...rest, busy: false, armed: null, result: opened };
@@ -797,8 +886,10 @@ class SidebarHover {
       return;
     }
     const threadId = shown.threadId;
+    // On another computer the child opens there too: the call names the host, and no files go along.
+    const host = this.#onHost(threadId);
     // The files go with a new problem only; a spin-off noted earlier is opened as it is.
-    const files = "spinoffId" in target ? [] : this.#compose.files;
+    const files = "spinoffId" in target || host.hostId ? [] : this.#compose.files;
     const run = this.#uploadRun;
     const { notice: _notice, ...composing } = this.#compose;
     this.#setCompose({ ...composing, busy: true, ...(files.length ? { uploading: 0 } : {}) });
@@ -811,16 +902,19 @@ class SidebarHover {
         }
         const params =
           "spinoffId" in target
-            ? { threadId, spinoffId: target.spinoffId }
-            : { threadId, text: target.text, ...(attachments.length ? { attachments } : {}) };
+            ? { threadId, spinoffId: target.spinoffId, ...host }
+            : { threadId, text: target.text, ...(attachments.length ? { attachments } : {}), ...host };
         return this.#adapter.invoke("spawn", params);
       })
       .then((result) => {
-        const childThreadId = (result as { childThreadId?: unknown } | null)?.childThreadId;
+        const answer = result as { childThreadId?: unknown; hostId?: unknown } | null;
+        const childThreadId = answer?.childThreadId;
         if (typeof childThreadId !== "string" || !childThreadId) throw new Error(this.#strings().badResponse);
         if (this.#shown?.threadId !== threadId || run !== this.#uploadRun) return;
         this.#awaiting = null;
-        const opened = { ok: true as const, childThreadId, title: target.text };
+        // Opened on the parent's computer: "Open" names that host.
+        const childHost = typeof answer?.hostId === "string" ? answer.hostId : host.hostId;
+        const opened = { ok: true as const, childThreadId, title: target.text, ...(childHost ? { hostId: childHost } : {}) };
         if ("spinoffId" in target) {
           // A spin-off was opened: what is typed and attached for a new problem stays.
           const { result: _previous, uploading: _uploading, ...rest } = this.#compose;
@@ -919,8 +1013,10 @@ class SidebarHover {
     this.#hide();
     clearTimeout(this.#prefetchTimer);
     this.#row = null;
+    this.#pointerThread = null;
     this.#badge.hidden = true;
     if (!this.#list.hidden) this.#closeList(false);
+    this.#suppress();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -949,7 +1045,7 @@ class SidebarHover {
     this.#pending.set(threadId, token);
     let request: Promise<unknown>;
     try {
-      request = Promise.resolve(this.#adapter.invoke("conversation", { threadId } satisfies ConversationParams));
+      request = Promise.resolve(this.#adapter.invoke("conversation", { threadId, ...this.#onHost(threadId) } satisfies ConversationParams));
     } catch (error) {
       request = Promise.reject(error);
     }
@@ -1020,6 +1116,7 @@ class SidebarHover {
     }
     this.#mount();
     this.#card.hidden = false;
+    this.#suppress();
     this.#renderCard(switching);
     this.#load(hit.threadId);
   }
@@ -1043,11 +1140,16 @@ class SidebarHover {
     this.#renderLater = false;
     this.#summaryRefused = null;
     this.#summaryFailed = null;
-    if (!this.#shown) return;
+    if (!this.#shown) {
+      this.#suppress();
+      return;
+    }
     this.#shown = null;
     this.#rendered = null;
     this.#card.hidden = true;
     this.#card.replaceChildren();
+    // The card is gone: the host's own previews show again as usual.
+    this.#suppress();
   }
 
   /** Rebuilds the card when what it shows changed; `force` also while the user types in it. */
@@ -1075,7 +1177,8 @@ class SidebarHover {
     if (asked !== undefined && !summarizing) this.#summarizing.delete(threadId);
     const refused = this.#summaryRefused === threadId;
     const failed = this.#summaryFailed?.threadId === threadId ? this.#summaryFailed.message : undefined;
-    const key = `${t.locale}|${[...this.#expanded].sort().join(",")}|${JSON.stringify(compose)}|${summarizing}|${refused}|${failed ?? ""}|${JSON.stringify(content)}`;
+    const remote = this.#remote(threadId);
+    const key = `${t.locale}|${[...this.#expanded].sort().join(",")}|${JSON.stringify(compose)}|${summarizing}|${refused}|${failed ?? ""}|${remote}|${JSON.stringify(content)}`;
     if (this.#rendered?.threadId !== threadId || this.#rendered.key !== key) {
       const scroll = fromTop ? 0 : this.#card.scrollTop;
       let nodes: Node[];
@@ -1090,6 +1193,7 @@ class SidebarHover {
           summarizing,
           summaryRefused: refused,
           ...(failed ? { summaryFailed: failed } : {}),
+          remote,
         });
       } catch (error) {
         nodes = cardNodes(
@@ -1109,11 +1213,30 @@ class SidebarHover {
   }
 
   /**
-   * Makes room for a host preview that opened or closed, but never moves the card from under the
-   * pointer: a preview closing while the user reads the card leaves the card where it is.
+   * A host preview opened or closed: hidden while the card shows (or is about to) for its row, else
+   * the card makes room for it; but the card never moves from under the pointer: a preview closing
+   * while the user reads the card leaves the card where it is.
    */
   #makeRoom(): void {
     if (this.#shown && !this.#overCard) this.#placeCard();
+  }
+
+  /**
+   * Whether the host's own previews are hidden now: while the card shows, unless the pointer is on
+   * another conversation's row (the card stays with its own while the user types), and while it is
+   * about to show for the row under the pointer. Sets or clears SUPPRESS_ATTRIBUTE on the document
+   * root, and restores the host rule once it is off. Never on when the card is not
+   * going to show.
+   */
+  #suppress(): void {
+    const shown = this.#shown;
+    const on = !this.#stopped && (shown
+      ? this.#pointerThread === shown.threadId || (this.#pointerThread === null && (this.#overCard || !this.#holding()))
+      : this.#showTimer !== undefined && this.#row !== null && this.#pointerThread === this.#row.threadId);
+    if (on !== this.#suppressing) {
+      this.#suppressing = on;
+      this.#doc.documentElement.toggleAttribute(SUPPRESS_ATTRIBUTE, on);
+    }
   }
 
   #placeCard(): void {
@@ -1122,6 +1245,7 @@ class SidebarHover {
     // A row the host has swapped for a new element: its last known place stands in until the pointer moves on.
     if (shown.element.isConnected) shown.box = boxOf(shown.element);
     const sidebar = this.#sidebar?.isConnected ? boxOf(this.#sidebar) : null;
+    const popup = hostPopup(this.#doc, shown.box, sidebar, (element) => element === this.#host || element.hasAttribute("data-codexhost-mainline"));
     const size = { width: this.#card.offsetWidth || CARD_WIDTH, height: this.#card.offsetHeight || 0 };
     const viewport = { width: this.#win.innerWidth, height: this.#win.innerHeight };
     if ((this.#overCard || this.#holding()) && this.#card.style.left) {
@@ -1129,7 +1253,6 @@ class SidebarHover {
       this.#card.style.top = `${keepInside(parseFloat(this.#card.style.top) || 0, size.height, viewport)}px`;
       return;
     }
-    const popup = hostPopup(this.#doc, shown.box, sidebar, (element) => element === this.#host || element.hasAttribute("data-codexhost-mainline"));
     this.#bridge(popup);
     const spot = cardSpot(shown.box, sidebar, size, viewport, popup ? boxOf(popup) : null);
     // For diagnosis: whether the card made room for a host preview, and what kind.
@@ -1361,6 +1484,8 @@ class SidebarHover {
   #openFromList(ref: RefView): void {
     const threadId = ref.origin?.threadId;
     if (!threadId) return;
+    // On another computer: opened by its host (codexhost Web's `web-remote:` session).
+    const hostId = ref.origin?.hostId ?? this.#onHost(threadId).hostId;
     this.#closeList(false);
     const seen = Promise.resolve()
       .then(() => this.#adapter.invoke("refs.seen", { key: ref.key }))
@@ -1368,7 +1493,8 @@ class SidebarHover {
     void Promise.race([seen, new Promise((resolve) => setTimeout(resolve, SEEN_WAIT_MS))]).then(() => {
       if (this.#stopped) return;
       try {
-        this.#adapter.openThread(threadId);
+        if (hostId) this.#adapter.openThread(threadId, hostId);
+        else this.#adapter.openThread(threadId);
       } catch (error) {
         console.warn("[mainline] could not open the conversation", error);
       }

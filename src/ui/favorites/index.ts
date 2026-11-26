@@ -9,7 +9,7 @@
  */
 import type { Locale } from "../../core/model.js";
 import { errorCodeOf, type FavoriteAdded, type Reveal } from "../../core/rpc.js";
-import { diagnosticsOn, type ControllerHandle, type LiveData, type SurfaceAdapter } from "../controller.js";
+import { diagnosticsOn, hostParams, type ControllerHandle, type LiveData, type SurfaceAdapter } from "../controller.js";
 import { adoptStyles, builder } from "../dom.js";
 import { hoverLocale } from "../hover/strings.js";
 import { isErrorCode } from "../../core/model.js";
@@ -271,7 +271,7 @@ class ConversationFavorites {
   readonly #timers = new Set<ReturnType<typeof setTimeout>>();
   #unmount: (() => void) | void = undefined;
   /** What the button would save: the selection when it settled. */
-  #pending: { threadId: string; text: string; role?: "agent" | "user" } | null = null;
+  #pending: { threadId: string; hostId?: string; text: string; role?: "agent" | "user" } | null = null;
   #state: ButtonState = "idle";
   #dragging = false;
   #settleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -436,7 +436,8 @@ class ConversationFavorites {
       return;
     }
     if (this.#state !== "idle" && this.#pending?.text === found.text) return;
-    this.#pending = { threadId: found.threadId, text: found.text, ...(found.role ? { role: found.role } : {}) };
+    // A passage of a conversation on another computer names its host too.
+    this.#pending = { threadId: found.threadId, ...hostParams(this.#adapter, found.threadId), text: found.text, ...(found.role ? { role: found.role } : {}) };
     this.#setState("idle");
     this.#place(found.range);
     // The host's toolbar may appear a moment after the selection settles.

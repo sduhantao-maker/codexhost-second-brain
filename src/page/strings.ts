@@ -271,6 +271,7 @@ const ZH_ERRORS: Record<ErrorCode, (detail: string) => string> = {
   UNAVAILABLE: (detail) => `改不了 Agent 协作：${detail}`,
   NEWER_VERSION: () => "数据文件是更新版本的第二大脑插件写的，这里没有改动它；请更新插件",
   PENDING: () => "codexhost 没有及时答复，子对话可能还在打开：开好后会出现在本对话下方，先不要再点",
+  REMOTE_ATTACHMENTS: () => "这个对话在另一台电脑上，子对话也开在那里，那台电脑读不到本机的文件：开子对话时不能附带照片、文件或视频",
 };
 
 const EN_ERRORS: Record<ErrorCode, (detail: string) => string> = {
@@ -296,6 +297,7 @@ const EN_ERRORS: Record<ErrorCode, (detail: string) => string> = {
   UNAVAILABLE: (detail) => `The agent integration cannot be changed: ${detail}`,
   NEWER_VERSION: () => "A data file was written by a newer version of Second Brain and was left as it is; update the extension",
   PENDING: () => "No answer from codexhost yet; the child may still open under this conversation",
+  REMOTE_ATTACHMENTS: () => "This conversation is on another computer, where the child opens too, and that computer cannot read files on this one: no photos, files or videos can go along",
 };
 
 /** Where each agent keeps what the integration changes. */

@@ -13,7 +13,8 @@ export interface SnapshotParams {
    * dashes), so that the backend keeps the conversation open in each one apart.
    */
   client?: string;
-  focus?: { threadId: string; surface: Surface };
+  /** The open conversation; `hostId` names its remote host when it is on another computer (codexhost Web). */
+  focus?: { threadId: string; surface: Surface; hostId?: string };
   locale?: Locale;
   /** The overview page knows the UI language for sure; the capsule only guesses it. */
   localeSource?: "page" | "surface";
@@ -37,6 +38,8 @@ export interface TreeReport {
   nodes: Record<string, { title?: string; status: ThreadStatus; harnessId?: string }>;
   /** Child to parent. */
   parents: Record<string, string>;
+  /** codexhost Web: the remote host of each conversation on another computer its sidebar shows. */
+  hosts?: Record<string, string>;
 }
 
 export type AgentId = "claude" | "codex";
@@ -90,6 +93,11 @@ export interface SnapshotResultV2 {
   alerts?: RefView[];
   /** Known delegation links, child to parent. */
   parents?: Record<string, string>;
+  /**
+   * The conversations this snapshot names that run on another computer, with their remote host's id
+   * (`remote-peer:…`): codexhost Web opens and names them by it. Local conversations are not listed.
+   */
+  hosts?: Record<string, string>;
   /** How the model summaries are doing. */
   summarizer?: SummarizerStatus;
   /** The workspace (last folder of the working directory) of each conversation, where known. */
@@ -192,9 +200,14 @@ export interface SummarizerStatus {
  */
 export type SummaryProblem = "CLAUDE_MISSING" | "CODEX_MISSING" | "MODEL_CALLS_OFF";
 
-/** `conversation`: the full view of one conversation's mainline, or its draft. */
+/**
+ * `conversation`: the full view of one conversation's mainline, or its draft. Every call that names a
+ * conversation on another computer also names its remote host (`hostId`, `remote-peer:…`); the
+ * backend takes nothing else for one.
+ */
 export interface ConversationParams {
   threadId: string;
+  hostId?: string;
 }
 
 /** `search`: find conversations by any clue. */
@@ -219,6 +232,8 @@ export interface SearchResult {
   refs: string[];
   threadStatus: ThreadStatus;
   updatedAt: number;
+  /** Its remote host, when it is on another computer. */
+  hostId?: string;
 }
 
 export type MutateV2Params =
@@ -251,7 +266,7 @@ export type MutateV2Params =
  * problem written in one line (noted as a spin-off first; a conversation without a mainline gets
  * one from its draft). `attachments` are ids from `attach.begin`, fully sent with `attach.chunk`.
  */
-export type SpawnParams = ({ threadId: string; spinoffId: string } | { threadId: string; text: string }) & { attachments?: string[] };
+export type SpawnParams = ({ threadId: string; spinoffId: string } | { threadId: string; text: string }) & { attachments?: string[]; hostId?: string };
 
 /** `attach.begin`: makes room for one file to send along with a new child conversation. */
 export interface AttachBeginParams {
@@ -269,6 +284,8 @@ export interface AttachChunkParams {
 
 export interface SpawnResult {
   childThreadId: string;
+  /** The remote host the child opened on, when the parent is on another computer. */
+  hostId?: string;
 }
 
 /** A number of files and the bytes they take. */

@@ -7,6 +7,7 @@
  * shows marks its news seen, and the summary's list opens a conversation through the surface.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { webSessionId } from "../src/core/hosts.js";
 import type { RefView } from "../src/core/refs.js";
 import { createDesktopAdapter } from "../src/desktop/adapter.js";
 import type { DesktopApi, DesktopSidebarRow, WebApi } from "../src/host/types.js";
@@ -17,7 +18,13 @@ import { NOW, ref42, sampleSnapshot } from "./fixtures/v2.js";
 
 const OPEN = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
 const FOLDED = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
-const news = (threadId: string, number: number, title: string): RefView => ({ ...ref42, key: `acme/widgets#${number}`, number, title, origin: { threadId, title, turn: 2 } });
+const news = (threadId: string, number: number, title: string, hostId?: string): RefView => ({
+  ...ref42,
+  key: `acme/widgets#${number}`,
+  number,
+  title,
+  origin: { threadId, title, turn: 2, ...(hostId ? { hostId } : {}) },
+});
 
 function box(element: Element, left: number, top: number, width: number, height: number) {
   Object.defineProperty(element, "getBoundingClientRect", {
@@ -193,5 +200,58 @@ describe("on codexhost Web", () => {
     press(recent.querySelector(".title")!);
     await vi.advanceTimersByTimeAsync(10);
     expect(invoke).toHaveBeenCalledWith("refs.seenForThread", { threadId: OPEN });
+  });
+
+  it("rings on the row of a conversation on another computer, names its host when its news is seen, and opens it by its host from the list", async () => {
+    const HOST = "remote-peer:0d1e2f3a-aaaa-4bbb-8ccc-000000000001";
+    const sidebar = document.createElement("aside");
+    sidebar.setAttribute("data-cx-region", "sidebar");
+    box(sidebar, 0, 0, 260, 800);
+    // A remote host's workspace, collapsed, with the conversation in it; the same conversation in the Recent list.
+    const workspace = document.createElement("div");
+    workspace.setAttribute("data-row-key", `workspace:remote-workspace:${btoa(JSON.stringify([HOST, null]))}`);
+    const sessions = document.createElement("div");
+    sessions.style.display = "none";
+    sessions.append(row({ "data-row-key": `session:${webSessionId(OPEN, HOST)}`, role: "treeitem" }, "部署脚本", null));
+    const recent = row({ "data-row-key": `recent:${webSessionId(OPEN, HOST)}`, role: "treeitem" }, "部署脚本", 300);
+    // A row whose key does not decode: no bell, no card, never trusted.
+    const broken = row({ "data-row-key": "recent:web-remote:@@@", role: "treeitem" }, "坏的行", 340);
+    sidebar.append(workspace, sessions, recent, broken);
+    document.body.append(sidebar);
+    const invoke = vi.fn(async (_method: string, _params?: unknown) => ({ ok: true }));
+    const api: WebApi = {
+      id: "second-brain",
+      signal: new AbortController().signal,
+      apiVersion: 1,
+      dom: { mount: () => undefined },
+      track: () => undefined,
+      assets: { url: (file) => file },
+      storage: { get: async () => ({}), set: async (values) => values, onChange: () => () => undefined },
+      backend: { invoke },
+    };
+    const adapter = createWebAdapter(api, document);
+    const { handle, publish } = controller();
+    stops.push(startHover(adapter, handle), () => adapter.dispose?.());
+    publish("v1", [news(OPEN, 42, "部署脚本在新机器上跑不起来", HOST), news(FOLDED, 51, "docs: 补上回滚步骤", HOST)]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bell(OPEN)).not.toBeNull();
+    expect(bell(OPEN)!.style.top).toBe(`${300 + 16}px`);
+    press(recent.querySelector(".title")!);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(invoke).toHaveBeenCalledWith("refs.seenForThread", { threadId: OPEN, hostId: HOST });
+    // Hovering the broken row asks nothing.
+    broken.querySelector(".title")!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true, pointerType: "mouse" }));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(invoke.mock.calls.filter(([method]) => method === "conversation")).toEqual([]);
+    // FOLDED has no row in sight: the list opens it by its host (its row, once the sidebar shows one).
+    const folded = row({ "data-row-key": `session:${webSessionId(FOLDED, HOST)}`, role: "treeitem" }, "回滚步骤", null);
+    sessions.append(folded);
+    const clicked = vi.fn();
+    folded.addEventListener("click", clicked);
+    summary()!.click();
+    [...overlay()!.querySelectorAll<HTMLButtonElement>(".news-list button")].find((button) => button.textContent === "打开对话")!.click();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(invoke).toHaveBeenCalledWith("refs.seen", { key: "acme/widgets#51" });
+    expect(clicked).toHaveBeenCalledOnce();
   });
 });

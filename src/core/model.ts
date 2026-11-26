@@ -164,6 +164,11 @@ export const ERROR_CODES = [
   "NEWER_VERSION",
   /** codexhost has not answered in time: the child conversation may still open in the background. */
   "PENDING",
+  /**
+   * Files sent along with a child conversation on another computer (a remote host): it opens there,
+   * and that computer cannot read the files kept on this one.
+   */
+  "REMOTE_ATTACHMENTS",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -210,18 +215,29 @@ export function newId(
 }
 
 /**
- * A conversation id as codexhost and the agents make them (UUIDs, `draft-…`, `child-9`): the
- * characters codexhost allows in the ids it stores, starting with a letter or digit.
+ * A conversation id as codexhost and the agents make them (UUIDs, `child-9`): the characters
+ * codexhost allows in the ids it stores, starting with a letter or digit.
  */
 const THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,255}$/u;
+/**
+ * A new conversation that has not been sent yet: codexhost Web and Codex Desktop's composer call it
+ * `draft-<n>` (`draft-e0aa`), Desktop's sidebar `client-new-thread:<uuid>`. It is no conversation:
+ * codexhost cannot read it, and it gets a Thread id of its own once it is sent.
+ */
+const DRAFT_ID = /^(?:draft-|client-new-thread:)/u;
 /**
  * Names every plain object has. Ids are keys of plain objects throughout, and `__proto__` as one
  * would change the object's prototype; those starting with `_` fail THREAD_ID already.
  */
 const OBJECT_KEYS = new Set(["constructor", "prototype", "toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable"]);
 
+export function isDraftId(value: unknown): boolean {
+  return typeof value === "string" && DRAFT_ID.test(value);
+}
+
+/** A conversation id, never a draft's (see isDraftId): nothing reads, summarizes or files anything under one. */
 export function isThreadId(value: unknown): value is string {
-  return typeof value === "string" && THREAD_ID.test(value) && !OBJECT_KEYS.has(value);
+  return typeof value === "string" && THREAD_ID.test(value) && !OBJECT_KEYS.has(value) && !isDraftId(value);
 }
 
 // ---------------------------------------------------------------------------------------------

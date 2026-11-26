@@ -85,7 +85,12 @@
     /** A data file was written by a newer version of the extension: it is left as it is. */
     "NEWER_VERSION",
     /** codexhost has not answered in time: the child conversation may still open in the background. */
-    "PENDING"
+    "PENDING",
+    /**
+     * Files sent along with a child conversation on another computer (a remote host): it opens there,
+     * and that computer cannot read the files kept on this one.
+     */
+    "REMOTE_ATTACHMENTS"
   ];
   function isErrorCode(value) {
     return typeof value === "string" && ERROR_CODES.includes(value);
@@ -107,6 +112,15 @@
   }
   var LETTERS = "abcdefghijklmnopqrstuvwxyz";
   var ALPHANUMERIC = `${LETTERS}0123456789`;
+  var THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,255}$/u;
+  var DRAFT_ID = /^(?:draft-|client-new-thread:)/u;
+  var OBJECT_KEYS = /* @__PURE__ */ new Set(["constructor", "prototype", "toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable"]);
+  function isDraftId(value) {
+    return typeof value === "string" && DRAFT_ID.test(value);
+  }
+  function isThreadId(value) {
+    return typeof value === "string" && THREAD_ID.test(value) && !OBJECT_KEYS.has(value) && !isDraftId(value);
+  }
   function localeOf(value) {
     return typeof value === "string" && value.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
   }
@@ -181,6 +195,25 @@
     style.textContent = css2;
     root.append(style);
   }
+  function documentStyles(doc, css2) {
+    const Sheet = doc.defaultView?.CSSStyleSheet;
+    if (Sheet && "adoptedStyleSheets" in doc) {
+      try {
+        const sheet = new Sheet();
+        sheet.replaceSync(css2);
+        doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
+        return () => {
+          doc.adoptedStyleSheets = doc.adoptedStyleSheets.filter((item) => item !== sheet);
+        };
+      } catch {
+      }
+    }
+    const style = doc.createElement("style");
+    style.setAttribute("data-codexhost-mainline-styles", "");
+    style.textContent = css2;
+    (doc.head ?? doc.documentElement).append(style);
+    return () => style.remove();
+  }
 
   // src/core/attachments.ts
   var ATTACH_CHUNK_BYTES = 512 * 1024;
@@ -244,7 +277,8 @@
     NO_SUMMARIZER: () => "\u6CA1\u6709\u51DD\u7EC3\uFF1A\u6309\u8BBE\u7F6E\uFF0C\u8FD9\u4E2A Agent \u7684\u5BF9\u8BDD\u4E0D\u53D1\u7ED9\u6A21\u578B\u3002\u8981\u51DD\u7EC3\uFF0C\u8BF7\u5728\u603B\u89C8\u9875\u300C\u8BBE\u7F6E\u300D\u91CC\u4E3A\u300C\u5176\u4ED6 Agent\uFF08\u5982 pi\u3001DeepSeek\u3001Grok\uFF09\u7684\u5BF9\u8BDD\u300D\u9009\u4E00\u4E2A\u6A21\u578B",
     UNAVAILABLE: (detail) => `\u6539\u4E0D\u4E86 Agent \u534F\u4F5C\uFF1A${detail}`,
     NEWER_VERSION: () => "\u6570\u636E\u6587\u4EF6\u662F\u66F4\u65B0\u7248\u672C\u7684\u7B2C\u4E8C\u5927\u8111\u63D2\u4EF6\u5199\u7684\uFF0C\u8FD9\u91CC\u6CA1\u6709\u6539\u52A8\u5B83\uFF1B\u8BF7\u66F4\u65B0\u63D2\u4EF6",
-    PENDING: () => "codexhost \u6CA1\u6709\u53CA\u65F6\u7B54\u590D\uFF0C\u5B50\u5BF9\u8BDD\u53EF\u80FD\u8FD8\u5728\u6253\u5F00\uFF1A\u5F00\u597D\u540E\u4F1A\u51FA\u73B0\u5728\u672C\u5BF9\u8BDD\u4E0B\u65B9\uFF0C\u5148\u4E0D\u8981\u518D\u70B9"
+    PENDING: () => "codexhost \u6CA1\u6709\u53CA\u65F6\u7B54\u590D\uFF0C\u5B50\u5BF9\u8BDD\u53EF\u80FD\u8FD8\u5728\u6253\u5F00\uFF1A\u5F00\u597D\u540E\u4F1A\u51FA\u73B0\u5728\u672C\u5BF9\u8BDD\u4E0B\u65B9\uFF0C\u5148\u4E0D\u8981\u518D\u70B9",
+    REMOTE_ATTACHMENTS: () => "\u8FD9\u4E2A\u5BF9\u8BDD\u5728\u53E6\u4E00\u53F0\u7535\u8111\u4E0A\uFF0C\u5B50\u5BF9\u8BDD\u4E5F\u5F00\u5728\u90A3\u91CC\uFF0C\u90A3\u53F0\u7535\u8111\u8BFB\u4E0D\u5230\u672C\u673A\u7684\u6587\u4EF6\uFF1A\u5F00\u5B50\u5BF9\u8BDD\u65F6\u4E0D\u80FD\u9644\u5E26\u7167\u7247\u3001\u6587\u4EF6\u6216\u89C6\u9891"
   };
   var EN_ERRORS = {
     INVALID_ARGUMENT: (detail) => `Not changed: ${detail}`,
@@ -267,7 +301,8 @@
     NO_SUMMARIZER: () => "Not summarized: the settings send conversations of this agent to no model. To summarize it, choose a model under \u201CConversations of other agents (pi, DeepSeek, Grok, \u2026)\u201D in the overview's Settings tab",
     UNAVAILABLE: (detail) => `The agent integration cannot be changed: ${detail}`,
     NEWER_VERSION: () => "A data file was written by a newer version of Second Brain and was left as it is; update the extension",
-    PENDING: () => "No answer from codexhost yet; the child may still open under this conversation"
+    PENDING: () => "No answer from codexhost yet; the child may still open under this conversation",
+    REMOTE_ATTACHMENTS: () => "This conversation is on another computer, where the child opens too, and that computer cannot read files on this one: no photos, files or videos can go along"
   };
   function errorText(table, fallback, code, message) {
     const detail = errorDetail(message);
@@ -1274,7 +1309,8 @@
           on: {
             click: (event) => {
               event.stopPropagation();
-              this.options.openThread(item.threadId);
+              if (item.hostId) this.options.openThread(item.threadId, item.hostId);
+              else this.options.openThread(item.threadId);
               this.#setOpen(false);
             }
           }
@@ -1311,7 +1347,8 @@
           click: (event) => {
             event.stopPropagation();
             void this.options.call?.("refs.seen", { key: ref.key });
-            this.options.openThread(origin.threadId);
+            if (origin.hostId) this.options.openThread(origin.threadId, origin.hostId);
+            else this.options.openThread(origin.threadId);
             this.#setOpen(false);
           }
         }
@@ -1482,6 +1519,10 @@
     }
     return `c${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12).padEnd(10, "0")}`;
   }
+  function hostParams(adapter, threadId) {
+    const hostId = threadId ? adapter.hostOf?.(threadId) : void 0;
+    return hostId ? { hostId } : {};
+  }
   function startController(adapter) {
     const doc = adapter.doc;
     const view = doc.defaultView;
@@ -1530,15 +1571,15 @@
           locale,
           surface: adapter.surface,
           mutate: async (params) => {
-            await adapter.invoke("mutate", params);
+            await adapter.invoke("mutate", { ...params, ...hostParams(adapter, params.threadId) });
             await refresh();
           },
           spawn: async (spinoffId) => {
             if (!current) return;
-            await adapter.invoke("spawn", { threadId: current, spinoffId });
+            await adapter.invoke("spawn", { threadId: current, spinoffId, ...hostParams(adapter, current) });
             await refresh();
           },
-          openThread: (threadId) => adapter.openThread(threadId),
+          openThread: (threadId, hostId) => hostId ? adapter.openThread(threadId, hostId) : adapter.openThread(threadId),
           call: (method, params) => adapter.invoke(method, params),
           anchor: () => adapter.anchor(),
           storage: safeStorage(view)
@@ -1575,7 +1616,7 @@
       if (loading === key) return;
       loading = key;
       try {
-        const next = await adapter.invoke("conversation", { threadId });
+        const next = await adapter.invoke("conversation", { threadId, ...hostParams(adapter, threadId) });
         if (disposed || current !== threadId) return;
         loaded = { threadId, version, view: next };
         render();
@@ -1596,7 +1637,7 @@
       const params = {
         client,
         ...data ? { version: data.version } : {},
-        ...current ? { focus: { threadId: current, surface: adapter.surface } } : {},
+        ...current ? { focus: { threadId: current, surface: adapter.surface, ...hostParams(adapter, current) } } : {},
         ...localeSent ? {} : { locale, localeSource: "surface" }
       };
       try {
@@ -1613,6 +1654,7 @@
             version: result.version,
             alerts: result.alerts ?? [],
             parents: result.parents ?? {},
+            hosts: result.hosts ?? {},
             ...result.command ? { command: result.command } : {},
             ...result.reveal ? { reveal: result.reveal } : {}
           };
@@ -1691,6 +1733,8 @@
   }
 
   // src/ui/hover/strings.ts
+  var HOST_STATES_ZH = { connected: "\u5DF2\u8FDE\u63A5", connecting: "\u8FDE\u63A5\u4E2D", "auth-error": "\u8BA4\u8BC1\u5931\u8D25", offline: "\u79BB\u7EBF", disabled: "\u5DF2\u505C\u7528", unknown: "\u72B6\u6001\u672A\u77E5" };
+  var HOST_STATES_EN = { connected: "Connected", connecting: "Connecting", "auth-error": "Auth error", offline: "Offline", disabled: "Disabled", unknown: "State unknown" };
   var REASONS_ZH = {
     comment: "\u6709\u65B0\u8BC4\u8BBA",
     review: "\u6709\u65B0\u8BC4\u5BA1",
@@ -1789,6 +1833,9 @@
     tooLarge: (name, limit) => `\u300C${name}\u300D\u8D85\u8FC7 ${limit}\uFF0C\u6CA1\u6709\u52A0\u4E0A`,
     tooMany: (count) => `\u6700\u591A\u9644\u5E26 ${count} \u4E2A\u6587\u4EF6`,
     tooMuch: (limit) => `\u9644\u4EF6\u5408\u8BA1\u4E0D\u80FD\u8D85\u8FC7 ${limit}`,
+    host: (name, state) => `${name ?? "\u53E6\u4E00\u53F0\u7535\u8111"} \xB7 ${HOST_STATES_ZH[state]}`,
+    hostTip: "\u8FD9\u4E2A\u5BF9\u8BDD\u5728\u53E6\u4E00\u53F0\u7535\u8111\u4E0A\uFF08codexhost Web \u8FDE\u63A5\u7684\u8FDC\u7A0B\u4E3B\u673A\uFF09\uFF0C\u7ECF\u672C\u673A\u7684 codexhost \u8BFB\u53D6\uFF0C\u5728\u672C\u673A\u51DD\u7EC3",
+    remoteFiles: "\u8FD9\u4E2A\u5BF9\u8BDD\u5728\u53E6\u4E00\u53F0\u7535\u8111\u4E0A\uFF0C\u5B50\u5BF9\u8BDD\u4E5F\u5F00\u5728\u90A3\u91CC\uFF0C\u90A3\u53F0\u7535\u8111\u8BFB\u4E0D\u5230\u672C\u673A\u7684\u6587\u4EF6\uFF0C\u6240\u4EE5\u4E0D\u80FD\u9644\u5E26\u7167\u7247\u3001\u6587\u4EF6\u6216\u89C6\u9891",
     time: (at, now) => relative2(at, now, "zh-CN"),
     date: (at) => new Date(at).toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" })
   };
@@ -1851,6 +1898,9 @@
     tooLarge: (name, limit) => `"${name}" is over ${limit} and was left out`,
     tooMany: (count) => `At most ${count} files`,
     tooMuch: (limit) => `Attachments may add up to ${limit} at most`,
+    host: (name, state) => `${name ?? "Another computer"} \xB7 ${HOST_STATES_EN[state]}`,
+    hostTip: "This conversation is on another computer (a remote host connected to codexhost Web); it is read through codexhost on this machine and summarized here",
+    remoteFiles: "This conversation is on another computer, where the child opens too, and that computer cannot read files on this one, so no photos, files or videos can go along",
     time: (at, now) => relative2(at, now, "en"),
     date: (at) => new Date(at).toLocaleString("en", { dateStyle: "medium", timeStyle: "short" })
   };
@@ -2331,7 +2381,7 @@
         return;
       }
       if (this.#state !== "idle" && this.#pending?.text === found.text) return;
-      this.#pending = { threadId: found.threadId, text: found.text, ...found.role ? { role: found.role } : {} };
+      this.#pending = { threadId: found.threadId, ...hostParams(this.#adapter, found.threadId), text: found.text, ...found.role ? { role: found.role } : {} };
       this.#setState("idle");
       this.#place(found.range);
       for (const ms of REPLACE_MS) this.#later(() => this.#follow(), ms);
@@ -2610,8 +2660,8 @@
       "div",
       { class: "compose-result", attrs: { "data-ok": "" } },
       h("span", { text: t.spawned(state.result.title) }),
-      ((childThreadId) => h("button", { class: "btn small", text: t.openIt, attrs: { type: "button" }, on: { click: () => ctx.actions.open(childThreadId) } }))(
-        state.result.childThreadId
+      (({ childThreadId, hostId }) => h("button", { class: "btn small", text: t.openIt, attrs: { type: "button" }, on: { click: () => ctx.actions.open(childThreadId, hostId) } }))(
+        state.result
       )
     ) : state.result.pending ? h("div", { class: "compose-result", attrs: { "data-pending": "" }, text: state.result.message }) : h("div", { class: "compose-result", attrs: { role: "alert" }, text: t.spawnFailed(state.result.message) }) : null;
     if (!state.open)
@@ -2645,20 +2695,21 @@
       const text = input.value.trim();
       if (text) ctx.actions.spawn({ text }, "new");
     });
-    const attach = h("button", {
+    const attach = ctx.remote ? null : h("button", {
       class: "attach",
       text: "\u{1F4CE}",
       title: t.attachTip,
       attrs: { type: "button", "aria-label": t.attach, disabled: state.busy ? "" : void 0 },
       on: { click: () => ctx.actions.attach() }
     });
+    const notice = state.notice ?? (ctx.remote ? t.remoteFiles : void 0);
     return h(
       "div",
-      { class: "compose", attrs: { "data-open": "" } },
+      { class: "compose", attrs: { "data-open": "", "data-remote": ctx.remote ? "" : void 0 } },
       result,
       h("div", { class: "compose-field" }, input, attach),
       state.files.length ? h("ul", { class: "attachments" }, ...state.files.map((file) => attachmentRow(file, ctx))) : null,
-      state.notice ? h("div", { class: "compose-notice", attrs: { role: "status" }, text: state.notice }) : null,
+      notice ? h("div", { class: "compose-notice", attrs: { role: "status" }, text: notice }) : null,
       h(
         "div",
         { class: "compose-buttons" },
@@ -2708,6 +2759,12 @@
         view.updatedAt ? h("span", { class: "when", text: t.time(view.updatedAt, now), title: t.date(view.updatedAt) }) : null,
         view.summary ? h("span", { class: "when summarized", text: t.summarized(t.time(view.summary.at, now)), title: view.summary.model }) : null
       ),
+      view.host ? h(
+        "div",
+        { class: "host", attrs: { "data-state": view.host.state }, title: t.hostTip },
+        h("span", { class: "dot", attrs: { "data-host": view.host.state, "aria-hidden": "true" } }),
+        h("span", { class: "host-text", text: t.host(view.host.name, view.host.state) })
+      ) : null,
       view.tags.length ? h("div", { class: "tags" }, ...view.tags.map((tag) => h("span", { class: "chip", text: tag, title: tag }))) : null
     );
   }
@@ -2725,7 +2782,7 @@
         class: "rel",
         title: t.open(other.title),
         attrs: { type: "button", "data-role": role, "data-thread": other.threadId },
-        on: { click: () => ctx.actions.open(other.threadId) }
+        on: { click: () => ctx.actions.open(other.threadId, other.hostId) }
       },
       h("span", { class: "rel-label", text: label }),
       h("span", { class: "dot", title: t.live[other.threadStatus], attrs: { "data-status": other.threadStatus } }),
@@ -2873,7 +2930,7 @@
             class: "child",
             title: t.open(child.title),
             attrs: { type: "button", "data-thread": child.threadId },
-            on: { click: () => ctx.actions.open(child.threadId) }
+            on: { click: () => ctx.actions.open(child.threadId, child.hostId) }
           },
           h("span", { class: "dot", title: t.live[child.threadStatus], attrs: { "data-status": child.threadStatus } }),
           h("span", { class: "child-body" }, h("span", { class: "child-title", text: child.title }), meta ? h("span", { class: "child-meta", text: meta }) : null)
@@ -3419,6 +3476,37 @@ button {
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 6px;
+}
+
+/* The computer a conversation on another computer runs on, and whether it is connected. */
+.host {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-top: 4px;
+  color: var(--cxm-muted);
+  font-size: 11.5px;
+}
+
+.host-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dot[data-host="connected"] {
+  background: var(--cxm-ok);
+}
+
+.dot[data-host="connecting"] {
+  background: var(--cxm-amber-dot);
+}
+
+.dot[data-host="auth-error"],
+.dot[data-host="offline"] {
+  background: var(--cxm-danger);
 }
 
 .relations,
@@ -4237,6 +4325,11 @@ a.ref {
   var LIST_GAP = 6;
   var WINDOW_BUTTONS = { left: 0, top: 0, right: 84, bottom: 44, width: 84, height: 44 };
   var OVERLAYS = "[data-codexhost-mainline], [data-codexhost-mainline-hover], [data-codexhost-mainline-favorites]";
+  var SUPPRESS_ATTRIBUTE = "data-codexhost-mainline-card";
+  var PREVIEW_CSS = `:root[${SUPPRESS_ATTRIBUTE}] body > [style*="--dsh-hover-preview-fade"],
+:root[${SUPPRESS_ATTRIBUTE}] [popover][id$="-hover-card"] {
+  display: none !important;
+}`;
   var quoted = (value) => value.replace(/["\\]/gu, "\\$&");
   var Stopped = class extends Error {
   };
@@ -4305,9 +4398,15 @@ a.ref {
     #expanded = /* @__PURE__ */ new Set();
     /** What the card shows now, to skip rebuilding it when nothing changed. */
     #rendered = null;
-    /** The host's own preview of the row that the card sits beside, if any. */
+    /** The host's own preview of the row that the card sits beside, if any (only where hiding it did not work). */
     #beside = null;
     #overBeside = false;
+    /** A conversation id over its row, null over the card or outside the sidebar, undefined over an unhandled sidebar row. */
+    #pointerThread = null;
+    /** Whether the host's previews are hidden now (SUPPRESS_ATTRIBUTE on the document root). */
+    #suppressing = false;
+    /** Takes PREVIEW_CSS off the page again. */
+    #removeStyles;
     #controller;
     /** Opening a child conversation from the card. */
     #compose = COMPOSE_IDLE;
@@ -4389,9 +4488,10 @@ a.ref {
       this.#root = h("div", { class: "root" }, this.#card, this.#badge, this.#summary, this.#list, this.#picker, this.#live);
       shadow.append(this.#root);
       this.#actions = {
-        open: (threadId) => {
+        open: (threadId, hostId) => {
           try {
-            this.#adapter.openThread(threadId);
+            if (hostId) this.#adapter.openThread(threadId, hostId);
+            else this.#adapter.openThread(threadId);
           } catch (error) {
             console.warn("[mainline] could not open the conversation", error);
           } finally {
@@ -4419,6 +4519,10 @@ a.ref {
         },
         attach: () => {
           if (this.#compose.busy) return;
+          if (this.#shown && this.#remote(this.#shown.threadId)) {
+            this.#setCompose({ ...this.#compose, open: true, notice: this.#strings().remoteFiles });
+            return;
+          }
           this.#picking = true;
           clearTimeout(this.#pickTimer);
           try {
@@ -4441,7 +4545,7 @@ a.ref {
           this.#summaryFailed = null;
           this.#summarizing.set(threadId, Date.now());
           this.#renderCard(false, true);
-          void Promise.resolve().then(() => this.#adapter.invoke("summarize", { threadId })).catch((error) => {
+          void Promise.resolve().then(() => this.#adapter.invoke("summarize", { threadId, ...this.#onHost(threadId) })).catch((error) => {
             this.#summarizing.delete(threadId);
             const code = errorCodeOf(error);
             if (this.#shown?.threadId === threadId) {
@@ -4458,9 +4562,11 @@ a.ref {
       this.#listen(this.#card, "pointerenter", () => {
         this.#overCard = true;
         this.#cancelHide();
+        this.#suppress();
       });
       this.#listen(this.#card, "pointerleave", () => {
         this.#overCard = false;
+        this.#suppress();
         if (!this.#row) this.#scheduleHide();
       });
       this.#listen(this.#card, "focusout", () => {
@@ -4512,6 +4618,10 @@ a.ref {
       const dragging = (event) => {
         const transfer = event.dataTransfer;
         if (!transfer || !Array.from(transfer.types ?? []).includes("Files") || this.#compose.busy) return;
+        if (this.#shown && this.#remote(this.#shown.threadId)) {
+          event.preventDefault();
+          return;
+        }
         event.preventDefault();
         transfer.dropEffect = "copy";
         this.#cancelHide();
@@ -4531,6 +4641,7 @@ a.ref {
       });
       this.#listen(doc, "scroll", (event) => this.#onScroll(event), { capture: true, passive: true });
       this.#listen(this.#win, "resize", () => this.#onScroll(null));
+      this.#removeStyles = documentStyles(doc, PREVIEW_CSS);
       const popups = new this.#win.MutationObserver(() => this.#makeRoom());
       popups.observe(doc.body ?? doc.documentElement, { childList: true });
       this.#cleanup.push(() => popups.disconnect());
@@ -4561,6 +4672,12 @@ a.ref {
       this.#unbindSidebar?.();
       this.#unbindSidebar = void 0;
       this.#bridge(null);
+      this.#shown = null;
+      this.#row = null;
+      this.#pointerThread = null;
+      this.#suppress();
+      this.#removeStyles?.();
+      this.#removeStyles = void 0;
       for (const stop of this.#cleanup.splice(0)) {
         try {
           stop();
@@ -4679,13 +4796,25 @@ a.ref {
       const last = this.#activated;
       if (last?.threadId === threadId && Date.now() - last.at < ACTIVATED_MS) return;
       this.#activated = { threadId, at: Date.now() };
-      void Promise.resolve().then(() => this.#adapter.invoke("refs.seenForThread", { threadId })).then(() => this.#controller.refresh()).catch(() => void 0);
+      void Promise.resolve().then(() => this.#adapter.invoke("refs.seenForThread", { threadId, ...this.#onHost(threadId) })).then(() => this.#controller.refresh()).catch(() => void 0);
+    }
+    /**
+     * The `hostId` a call names this conversation's remote host by, when it is on another computer:
+     * its row's, else what the surface knows; nothing for a local conversation.
+     */
+    #onHost(threadId) {
+      const row = this.#shown?.threadId === threadId ? this.#shown : this.#row?.threadId === threadId ? this.#row : null;
+      return row?.hostId ? { hostId: row.hostId } : hostParams(this.#adapter, threadId);
+    }
+    /** Whether a conversation runs on another computer. */
+    #remote(threadId) {
+      return this.#onHost(threadId).hostId !== void 0;
     }
     #onOver(event) {
       if (event.pointerType === "touch") return;
       const hit = this.#rowAt(event.target);
       if (hit) this.#enterRow(hit);
-      else this.#leaveRow();
+      else this.#leaveRow(true);
     }
     #onOut(event) {
       if (event.pointerType === "touch") return;
@@ -4695,11 +4824,18 @@ a.ref {
     }
     #enterRow(found) {
       this.#cancelHide();
-      if (this.#shown && this.#holding() && found.threadId !== this.#shown.threadId) return;
+      this.#pointerThread = found.threadId;
+      if (this.#shown && this.#holding() && found.threadId !== this.#shown.threadId) {
+        this.#suppress();
+        return;
+      }
       const row = this.#row;
-      if (row && row.element === found.element && row.threadId === found.threadId) return;
+      if (row && row.element === found.element && row.threadId === found.threadId) {
+        this.#suppress();
+        return;
+      }
       const bell = this.#bellInSight(found.threadId) || row?.threadId === found.threadId && row.bell;
-      const hit = { element: found.element, threadId: found.threadId, box: boxOf2(found.element), bell };
+      const hit = { element: found.element, threadId: found.threadId, box: boxOf2(found.element), bell, ...found.hostId ? { hostId: found.hostId } : {} };
       this.#row = hit;
       clearTimeout(this.#prefetchTimer);
       this.#renderBadge();
@@ -4714,15 +4850,18 @@ a.ref {
         this.#showTimer = void 0;
         if (this.#row === hit) this.#show(hit);
       }, SHOW_DELAY_MS);
+      this.#suppress();
     }
-    #leaveRow() {
+    #leaveRow(overOtherSidebarItem = false) {
       clearTimeout(this.#showTimer);
       this.#showTimer = void 0;
       clearTimeout(this.#prefetchTimer);
       this.#row = null;
+      this.#pointerThread = overOtherSidebarItem ? void 0 : null;
       this.#badge.hidden = true;
       this.#placeMarkers();
       if (this.#shown && !this.#overCard) this.#scheduleHide();
+      this.#suppress();
     }
     /** Hides the card soon, unless the pointer comes back to a row or onto the card (or the host's preview beside it) first. */
     #scheduleHide() {
@@ -4750,6 +4889,13 @@ a.ref {
     #addFiles(list) {
       if (!this.#shown || this.#compose.busy || !list.length) return;
       const t = this.#strings();
+      if (this.#remote(this.#shown.threadId)) {
+        const { result: _result2, ...rest2 } = this.#compose;
+        const opening2 = !rest2.open;
+        this.#setCompose({ ...rest2, open: true, notice: t.remoteFiles });
+        if (opening2) this.#focusField();
+        return;
+      }
       const files = [...this.#compose.files];
       let total = files.reduce((sum, file) => sum + file.size, 0);
       let pasted = files.filter((file) => /^pasted-\d+\./u.test(file.name)).length;
@@ -4824,7 +4970,8 @@ a.ref {
       if (!spinoff?.childThreadId) return;
       this.#awaiting = null;
       if (this.#shown?.threadId !== threadId || awaiting.run !== this.#uploadRun) return;
-      const opened = { ok: true, childThreadId: spinoff.childThreadId, title: target.text };
+      const childHost = this.#onHost(threadId).hostId;
+      const opened = { ok: true, childThreadId: spinoff.childThreadId, title: target.text, ...childHost ? { hostId: childHost } : {} };
       if ("spinoffId" in target) {
         const { result: _previous, uploading: _uploading, ...rest } = this.#compose;
         this.#compose = { ...rest, busy: false, armed: null, result: opened };
@@ -4851,7 +4998,8 @@ a.ref {
         return;
       }
       const threadId = shown.threadId;
-      const files = "spinoffId" in target ? [] : this.#compose.files;
+      const host = this.#onHost(threadId);
+      const files = "spinoffId" in target || host.hostId ? [] : this.#compose.files;
       const run = this.#uploadRun;
       const { notice: _notice, ...composing } = this.#compose;
       this.#setCompose({ ...composing, busy: true, ...files.length ? { uploading: 0 } : {} });
@@ -4860,14 +5008,16 @@ a.ref {
           const { uploading: _done, ...rest } = this.#compose;
           this.#setCompose(rest);
         }
-        const params = "spinoffId" in target ? { threadId, spinoffId: target.spinoffId } : { threadId, text: target.text, ...attachments.length ? { attachments } : {} };
+        const params = "spinoffId" in target ? { threadId, spinoffId: target.spinoffId, ...host } : { threadId, text: target.text, ...attachments.length ? { attachments } : {}, ...host };
         return this.#adapter.invoke("spawn", params);
       }).then((result) => {
-        const childThreadId = result?.childThreadId;
+        const answer = result;
+        const childThreadId = answer?.childThreadId;
         if (typeof childThreadId !== "string" || !childThreadId) throw new Error(this.#strings().badResponse);
         if (this.#shown?.threadId !== threadId || run !== this.#uploadRun) return;
         this.#awaiting = null;
-        const opened = { ok: true, childThreadId, title: target.text };
+        const childHost = typeof answer?.hostId === "string" ? answer.hostId : host.hostId;
+        const opened = { ok: true, childThreadId, title: target.text, ...childHost ? { hostId: childHost } : {} };
         if ("spinoffId" in target) {
           const { result: _previous, uploading: _uploading, ...rest } = this.#compose;
           this.#setCompose({ ...rest, busy: false, armed: null, result: opened });
@@ -4952,8 +5102,10 @@ a.ref {
       this.#hide();
       clearTimeout(this.#prefetchTimer);
       this.#row = null;
+      this.#pointerThread = null;
       this.#badge.hidden = true;
       if (!this.#list.hidden) this.#closeList(false);
+      this.#suppress();
     }
     // -------------------------------------------------------------------------------------------
     // Data
@@ -4978,7 +5130,7 @@ a.ref {
       this.#pending.set(threadId, token);
       let request;
       try {
-        request = Promise.resolve(this.#adapter.invoke("conversation", { threadId }));
+        request = Promise.resolve(this.#adapter.invoke("conversation", { threadId, ...this.#onHost(threadId) }));
       } catch (error) {
         request = Promise.reject(error);
       }
@@ -5041,6 +5193,7 @@ a.ref {
       }
       this.#mount();
       this.#card.hidden = false;
+      this.#suppress();
       this.#renderCard(switching);
       this.#load(hit.threadId);
     }
@@ -5062,11 +5215,15 @@ a.ref {
       this.#renderLater = false;
       this.#summaryRefused = null;
       this.#summaryFailed = null;
-      if (!this.#shown) return;
+      if (!this.#shown) {
+        this.#suppress();
+        return;
+      }
       this.#shown = null;
       this.#rendered = null;
       this.#card.hidden = true;
       this.#card.replaceChildren();
+      this.#suppress();
     }
     /** Rebuilds the card when what it shows changed; `force` also while the user types in it. */
     #renderCard(fromTop = false, force = false) {
@@ -5091,7 +5248,8 @@ a.ref {
       if (asked !== void 0 && !summarizing) this.#summarizing.delete(threadId);
       const refused = this.#summaryRefused === threadId;
       const failed = this.#summaryFailed?.threadId === threadId ? this.#summaryFailed.message : void 0;
-      const key = `${t.locale}|${[...this.#expanded].sort().join(",")}|${JSON.stringify(compose2)}|${summarizing}|${refused}|${failed ?? ""}|${JSON.stringify(content)}`;
+      const remote = this.#remote(threadId);
+      const key = `${t.locale}|${[...this.#expanded].sort().join(",")}|${JSON.stringify(compose2)}|${summarizing}|${refused}|${failed ?? ""}|${remote}|${JSON.stringify(content)}`;
       if (this.#rendered?.threadId !== threadId || this.#rendered.key !== key) {
         const scroll = fromTop ? 0 : this.#card.scrollTop;
         let nodes;
@@ -5105,7 +5263,8 @@ a.ref {
             compose: this.#compose,
             summarizing,
             summaryRefused: refused,
-            ...failed ? { summaryFailed: failed } : {}
+            ...failed ? { summaryFailed: failed } : {},
+            remote
           });
         } catch (error2) {
           nodes = cardNodes(
@@ -5123,24 +5282,40 @@ a.ref {
       this.#placeCard();
     }
     /**
-     * Makes room for a host preview that opened or closed, but never moves the card from under the
-     * pointer: a preview closing while the user reads the card leaves the card where it is.
+     * A host preview opened or closed: hidden while the card shows (or is about to) for its row, else
+     * the card makes room for it; but the card never moves from under the pointer: a preview closing
+     * while the user reads the card leaves the card where it is.
      */
     #makeRoom() {
       if (this.#shown && !this.#overCard) this.#placeCard();
+    }
+    /**
+     * Whether the host's own previews are hidden now: while the card shows, unless the pointer is on
+     * another conversation's row (the card stays with its own while the user types), and while it is
+     * about to show for the row under the pointer. Sets or clears SUPPRESS_ATTRIBUTE on the document
+     * root, and restores the host rule once it is off. Never on when the card is not
+     * going to show.
+     */
+    #suppress() {
+      const shown = this.#shown;
+      const on = !this.#stopped && (shown ? this.#pointerThread === shown.threadId || this.#pointerThread === null && (this.#overCard || !this.#holding()) : this.#showTimer !== void 0 && this.#row !== null && this.#pointerThread === this.#row.threadId);
+      if (on !== this.#suppressing) {
+        this.#suppressing = on;
+        this.#doc.documentElement.toggleAttribute(SUPPRESS_ATTRIBUTE, on);
+      }
     }
     #placeCard() {
       const shown = this.#shown;
       if (!shown) return;
       if (shown.element.isConnected) shown.box = boxOf2(shown.element);
       const sidebar = this.#sidebar?.isConnected ? boxOf2(this.#sidebar) : null;
+      const popup = hostPopup(this.#doc, shown.box, sidebar, (element) => element === this.#host || element.hasAttribute("data-codexhost-mainline"));
       const size = { width: this.#card.offsetWidth || CARD_WIDTH, height: this.#card.offsetHeight || 0 };
       const viewport = { width: this.#win.innerWidth, height: this.#win.innerHeight };
       if ((this.#overCard || this.#holding()) && this.#card.style.left) {
         this.#card.style.top = `${keepInside(parseFloat(this.#card.style.top) || 0, size.height, viewport)}px`;
         return;
       }
-      const popup = hostPopup(this.#doc, shown.box, sidebar, (element) => element === this.#host || element.hasAttribute("data-codexhost-mainline"));
       this.#bridge(popup);
       const spot = cardSpot(shown.box, sidebar, size, viewport, popup ? boxOf2(popup) : null);
       this.#card.toggleAttribute("data-beside", popup !== null);
@@ -5350,12 +5525,14 @@ a.ref {
     #openFromList(ref) {
       const threadId = ref.origin?.threadId;
       if (!threadId) return;
+      const hostId = ref.origin?.hostId ?? this.#onHost(threadId).hostId;
       this.#closeList(false);
       const seen = Promise.resolve().then(() => this.#adapter.invoke("refs.seen", { key: ref.key })).catch(() => void 0);
       void Promise.race([seen, new Promise((resolve) => setTimeout(resolve, SEEN_WAIT_MS))]).then(() => {
         if (this.#stopped) return;
         try {
-          this.#adapter.openThread(threadId);
+          if (hostId) this.#adapter.openThread(threadId, hostId);
+          else this.#adapter.openThread(threadId);
         } catch (error) {
           console.warn("[mainline] could not open the conversation", error);
         }
@@ -5460,21 +5637,25 @@ a.ref {
   function openComposer(doc) {
     const shown = [];
     const all = [];
+    let draftShown = false;
     for (const element of doc.querySelectorAll(`[${COMPOSER_ATTRIBUTE}]`)) {
       const threadId = element.getAttribute(COMPOSER_ATTRIBUTE);
-      if (!threadId || threadId.startsWith("draft-")) continue;
+      const visible = laidOut(element) || laidOut(element.parentElement);
+      if (isDraftId(threadId) && visible) draftShown = true;
+      if (!isThreadId(threadId)) continue;
       all.push({ threadId, element });
-      if (laidOut(element) || laidOut(element.parentElement)) shown.push({ threadId, element });
+      if (visible) shown.push({ threadId, element });
     }
+    if (draftShown && !shown.length) return null;
     const candidates = shown.length ? shown : all;
     const ids = new Set(candidates.map(({ threadId }) => threadId));
     return ids.size === 1 ? candidates[0] : void 0;
   }
   function currentDesktopThread(doc, rows) {
     const composer = openComposer(doc);
-    if (composer) return composer.threadId;
+    if (composer !== void 0) return composer?.threadId ?? null;
     for (const row of rows)
-      if (row.isLocal && row.threadId && row.element.getAttribute(ACTIVE_ROW_ATTRIBUTE) === "true") return row.threadId;
+      if (row.isLocal && isThreadId(row.threadId) && row.element.getAttribute(ACTIVE_ROW_ATTRIBUTE) === "true") return row.threadId;
     return null;
   }
   function desktopHeader(doc) {
@@ -5527,7 +5708,7 @@ a.ref {
     let rowIds = /* @__PURE__ */ new WeakMap();
     const rememberRows = (next) => {
       rowIds = /* @__PURE__ */ new WeakMap();
-      for (const row of next) if (row.isLocal && row.threadId) rowIds.set(row.element, row.threadId);
+      for (const row of next) if (row.isLocal && isThreadId(row.threadId)) rowIds.set(row.element, row.threadId);
     };
     let tree;
     let latest;
@@ -5629,7 +5810,7 @@ a.ref {
         const element = target instanceof Element ? target : null;
         const tree2 = element?.closest(`[${TREE_ROW_ATTRIBUTE}]`);
         const treeId = tree2?.getAttribute(TREE_ROW_ATTRIBUTE);
-        if (tree2 && treeId) return { element: tree2, threadId: treeId };
+        if (tree2 && isThreadId(treeId)) return { element: tree2, threadId: treeId };
         for (let node = element; node && node !== doc.body; node = node.parentElement) {
           const threadId = rowIds.get(node);
           if (threadId) return { element: node, threadId };

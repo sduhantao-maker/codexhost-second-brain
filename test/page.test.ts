@@ -169,6 +169,7 @@ function listenForOpen(): ReturnType<typeof vi.fn<(event: Event) => void>> {
 }
 
 const openedThread = (open: ReturnType<typeof listenForOpen>) => (open.mock.calls.at(-1)?.[0] as CustomEvent<{ threadId: string }> | undefined)?.detail.threadId;
+const openedHost = (open: ReturnType<typeof listenForOpen>) => (open.mock.calls.at(-1)?.[0] as CustomEvent<{ hostId?: string }> | undefined)?.detail.hostId;
 
 beforeEach(() => {
   document.body.replaceChildren();
@@ -222,6 +223,23 @@ describe("overview page: conversation tree", () => {
     labelled(childLine, "跳转").click();
     expect(openedThread(open)).toBe(T.child);
     expect(detailOf(root, T.child)).toBeNull();
+  });
+
+  it("names the host of a conversation on another computer when it reads, summarizes or opens it; a local one gets none", async () => {
+    const HOST = "remote-peer:0d1e2f3a-aaaa-4bbb-8ccc-000000000001";
+    const harness = await setup({ respond: (method) => (method === "snapshot" ? { ...sampleSnapshot(), hosts: { [T.child]: HOST, "draft-3": HOST, [T.main]: "local" } } : undefined) });
+    const { root } = harness;
+    await flush();
+    await openChildren(harness, T.main);
+    const open = listenForOpen();
+    labelled(lineOf(root, T.child), "跳转").click();
+    expect([openedThread(open), openedHost(open)]).toEqual([T.child, HOST]);
+    labelled(lineOf(root, T.main), "跳转").click();
+    expect([openedThread(open), openedHost(open)]).toEqual([T.main, undefined]);
+    await expand(harness, T.child);
+    expect(calls(harness, "conversation")).toContainEqual({ threadId: T.child, hostId: HOST });
+    await expand(harness, T.main);
+    expect(calls(harness, "conversation")).toContainEqual({ threadId: T.main });
   });
 
   it("groups the list by project when asked", async () => {
@@ -868,6 +886,33 @@ describe("favorites tab", () => {
       expect(harness.root.querySelector(".mlp-error")!.textContent).toContain("没能打开这个对话：Unknown local Desktop Thread");
     } finally {
       window.removeEventListener("codexhost-mainline:open-thread", refuse);
+    }
+  });
+
+  it("names the host of a passage's conversation on another computer when it opens it", async () => {
+    const HOST = "remote-peer:0d1e2f3a-aaaa-4bbb-8ccc-000000000001";
+    const opened: Array<{ threadId: string; hostId?: string }> = [];
+    const listen = (event: Event) => {
+      const detail = (event as CustomEvent<{ threadId: string; hostId?: string; handled?: boolean }>).detail;
+      detail.handled = true;
+      opened.push({ threadId: detail.threadId, ...(detail.hostId ? { hostId: detail.hostId } : {}) });
+    };
+    window.addEventListener("codexhost-mainline:open-thread", listen);
+    const harness = await setup({
+      respond: (method) => {
+        if (method === "favorites.list") return { ...favoritesList(), items: favoritesList().items.map((item) => (item.id === "fav2" ? { ...item, hostId: HOST } : item)) };
+        if (method === "favorites.reveal") return { threadId: UNKNOWN, hostId: HOST };
+        return undefined;
+      },
+    });
+    try {
+      await flush();
+      await showTab(harness, "favorites");
+      buttonIn(harness.root.querySelector<HTMLElement>("[data-favorite=fav2]")!, "跳回原文").click();
+      await flush();
+      expect(opened).toEqual([{ threadId: UNKNOWN, hostId: HOST }]);
+    } finally {
+      window.removeEventListener("codexhost-mainline:open-thread", listen);
     }
   });
 

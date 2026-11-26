@@ -2,7 +2,7 @@
  * Codex Desktop: finds the open window from Desktop's own markers, opens windows through the
  * extension API, and reports the Thread tree so the backend knows titles, states and parents.
  */
-import type { ThreadStatus } from "../core/model.js";
+import { isDraftId, isThreadId, type ThreadStatus } from "../core/model.js";
 import { leadingIcon } from "../ui/hover/layout.js";
 import type { TreeReport } from "../core/rpc.js";
 import type { DesktopApi, DesktopSidebarRow, ThreadTreeSnapshot } from "../host/types.js";
@@ -51,17 +51,20 @@ export function closeSettings(view: Window | null | undefined): boolean {
   return true;
 }
 
-/** The shown Composer portal; Desktop keeps hidden Composers of earlier views around. */
-export function openComposer(doc: Document): { threadId: string; element: Element } | undefined {
+/** The shown Composer portal, null for a visible draft; Desktop keeps hidden Composers of earlier views around. */
+export function openComposer(doc: Document): { threadId: string; element: Element } | null | undefined {
   const shown: Array<{ threadId: string; element: Element }> = [];
   const all: Array<{ threadId: string; element: Element }> = [];
+  let draftShown = false;
   for (const element of doc.querySelectorAll(`[${COMPOSER_ATTRIBUTE}]`)) {
     const threadId = element.getAttribute(COMPOSER_ATTRIBUTE);
-    // A new conversation that has not been sent yet is a draft, not a Thread.
-    if (!threadId || threadId.startsWith("draft-")) continue;
+    const visible = laidOut(element) || laidOut(element.parentElement);
+    if (isDraftId(threadId) && visible) draftShown = true;
+    if (!isThreadId(threadId)) continue;
     all.push({ threadId, element });
-    if (laidOut(element) || laidOut(element.parentElement)) shown.push({ threadId, element });
+    if (visible) shown.push({ threadId, element });
   }
+  if (draftShown && !shown.length) return null;
   const candidates = shown.length ? shown : all;
   const ids = new Set(candidates.map(({ threadId }) => threadId));
   return ids.size === 1 ? candidates[0] : undefined;
@@ -69,9 +72,9 @@ export function openComposer(doc: Document): { threadId: string; element: Elemen
 
 export function currentDesktopThread(doc: Document, rows: readonly DesktopSidebarRow[]): string | null {
   const composer = openComposer(doc);
-  if (composer) return composer.threadId;
+  if (composer !== undefined) return composer?.threadId ?? null;
   for (const row of rows)
-    if (row.isLocal && row.threadId && row.element.getAttribute(ACTIVE_ROW_ATTRIBUTE) === "true") return row.threadId;
+    if (row.isLocal && isThreadId(row.threadId) && row.element.getAttribute(ACTIVE_ROW_ATTRIBUTE) === "true") return row.threadId;
   return null;
 }
 
@@ -132,7 +135,7 @@ export function createDesktopAdapter(api: DesktopApi, doc: Document = document):
   let rowIds = new WeakMap<Element, string>();
   const rememberRows = (next: readonly DesktopSidebarRow[]) => {
     rowIds = new WeakMap();
-    for (const row of next) if (row.isLocal && row.threadId) rowIds.set(row.element, row.threadId);
+    for (const row of next) if (row.isLocal && isThreadId(row.threadId)) rowIds.set(row.element, row.threadId);
   };
   let tree: ThreadTreeSnapshot | undefined;
   let latest: LiveData | undefined;
@@ -242,7 +245,7 @@ export function createDesktopAdapter(api: DesktopApi, doc: Document = document):
       const element = target instanceof Element ? target : null;
       const tree = element?.closest<HTMLElement>(`[${TREE_ROW_ATTRIBUTE}]`);
       const treeId = tree?.getAttribute(TREE_ROW_ATTRIBUTE);
-      if (tree && treeId) return { element: tree, threadId: treeId };
+      if (tree && isThreadId(treeId)) return { element: tree, threadId: treeId };
       for (let node: Element | null = element; node && node !== doc.body; node = node.parentElement) {
         const threadId = rowIds.get(node);
         if (threadId) return { element: node as HTMLElement, threadId };

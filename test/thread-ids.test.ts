@@ -8,7 +8,7 @@ import * as ops from "../src/core/conversation-ops.js";
 import { conversationView } from "../src/core/conversation-view.js";
 import { emptyStateV2, normalizeStateV2 } from "../src/core/conversation.js";
 import { addFavorite, emptyFavorites } from "../src/core/favorites.js";
-import { isThreadId } from "../src/core/model.js";
+import { isDraftId, isThreadId } from "../src/core/model.js";
 import { emptyIndex, normalizeIndex } from "../src/core/refs.js";
 import { searchConversations } from "../src/core/search.js";
 
@@ -21,10 +21,20 @@ afterEach(() => {
 
 describe("conversation ids", () => {
   it("are the ids codexhost and the agents make, and nothing an object already has", () => {
-    for (const id of ["t1", "src", "old-1", "child-9", "e2e-1", "codex-own", "thread-of-this-test", "draft-e0aa", "019a0001-aaaa-7bbb-8ccc-000000000001", "5F0C9A1E-0000-4000-8000-000000000001", "ses_01ab.c~d", "a".repeat(256)])
+    for (const id of ["t1", "src", "old-1", "child-9", "e2e-1", "codex-own", "thread-of-this-test", "019a0001-aaaa-7bbb-8ccc-000000000001", "5F0C9A1E-0000-4000-8000-000000000001", "ses_01ab.c~d", "a".repeat(256)])
       expect(isThreadId(id), id).toBe(true);
     for (const id of ["__proto__", "constructor", "prototype", "toString", "valueOf", "hasOwnProperty", "isPrototypeOf", "__defineGetter__", "", " ", "a b", " t1", "-x", "_x", ".x", "x/y", "x:y", "x\\y", "主线", "a".repeat(257), 7, null, undefined])
       expect(isThreadId(id), String(id)).toBe(false);
+  });
+
+  it("are never drafts: a new conversation not sent yet is no conversation, on Web or on Desktop", () => {
+    // codexhost Web's and Desktop's composer call it draft-<n>; Desktop's sidebar client-new-thread:<uuid>.
+    for (const id of ["draft-19", "draft-e0aa", "client-new-thread:5f0c9a1e-0000-4000-8000-000000000001", "local:client-new-thread:5f0c9a1e-0000-4000-8000-000000000001", "web-remote:draft-3"]) {
+      expect(isThreadId(id), id).toBe(false);
+      expect(isDraftId(id) || id.includes(":"), id).toBe(true);
+    }
+    // Ids that only look like one somewhere inside stay conversations.
+    for (const id of ["drafts", "my-draft-1", "x-draft-2"]) expect(isThreadId(id), id).toBe(true);
   });
 
   it("never reach Object.prototype through the state, the link index or favorites", () => {

@@ -12,7 +12,8 @@
 import { formatSize } from "../core/attachments.js";
 import { cleanTags, currentMilestone, normalizeStateV2, progressOf, type Conversation, type ConversationStatus, type Spinoff, type StateV2 } from "../core/conversation.js";
 import { conversationView, parentOf, titleOf, type ConversationView, type MilestoneView, type TaskView, type ViewSources } from "../core/conversation-view.js";
-import { DEFAULT_SETTINGS, isErrorCode, localeOf, type Settings, type ThreadInfo, type ThreadStatus } from "../core/model.js";
+import { isRemoteHostId, webSessionId } from "../core/hosts.js";
+import { DEFAULT_SETTINGS, isErrorCode, isThreadId, localeOf, type Settings, type ThreadInfo, type ThreadStatus } from "../core/model.js";
 import type { RefView } from "../core/refs.js";
 import {
   errorCodeOf,
@@ -81,6 +82,8 @@ interface PageData {
   info: Record<string, ThreadInfo>;
   /** Known delegation links, child to parent. */
   parents: Record<string, string>;
+  /** Conversations on other computers the snapshot names, with their remote host. */
+  hosts: Record<string, string>;
   version: string;
   command?: string;
   /** How the model summaries are doing. */
@@ -162,7 +165,7 @@ class OverviewPage {
 
   /** A failed poll clears itself once the backend answers again; a failed action waits to be read. */
   #error: { text: string; kind: "poll" | "action" } | null = null;
-  #notice: { text: string; threadId?: string } | null = null;
+  #notice: { text: string; threadId?: string; hostId?: string } | null = null;
   #pending = false;
   #stopped = false;
   #localeSent = false;
@@ -364,6 +367,7 @@ class OverviewPage {
       state,
       info: readInfo(result.info),
       parents: readParents(result.parents),
+      hosts: readHosts(result.hosts),
       version: String(result.version),
       ...(typeof result.command === "string" && result.command ? { command: result.command } : {}),
       ...readSummarizer(result.summarizer),
@@ -388,7 +392,7 @@ class OverviewPage {
     }
     this.#viewLoading.add(threadId);
     try {
-      const view = await this.#api.backend.invoke("conversation", { threadId } satisfies ConversationParams);
+      const view = await this.#api.backend.invoke("conversation", { threadId, ...this.#onHost(threadId) } satisfies ConversationParams);
       if (isView(view, threadId)) {
         this.#views.set(threadId, view);
         if (this.#expanded.has(threadId)) this.#render();
@@ -524,7 +528,13 @@ class OverviewPage {
   }
 
   #mutate(params: MutateV2Params, focus?: readonly string[]): Promise<boolean> {
-    return this.#act(() => this.#api.backend.invoke("mutate", params), focus);
+    return this.#act(() => this.#api.backend.invoke("mutate", { ...params, ...this.#onHost(params.threadId) }), focus);
+  }
+
+  /** The `hostId` a call names a conversation's remote host by, when it is on another computer; nothing for a local one. */
+  #onHost(threadId: string): { hostId?: string } {
+    const hostId = this.#data?.hosts[threadId] ?? this.#data?.state.conversations[threadId]?.hostId;
+    return hostId && isRemoteHostId(hostId) ? { hostId } : {};
   }
 
   async #spawn(threadId: string, spinoff: Spinoff, focus: readonly string[]): Promise<void> {
@@ -532,11 +542,12 @@ class OverviewPage {
     if (this.#spawning.has(key)) return;
     this.#spawning.add(key);
     this.#render(true);
-    const opened: { child?: string; pending?: string } = {};
+    const opened: { child?: string; host?: string; pending?: string } = {};
     const ok = await this.#act(async () => {
       try {
-        const result = (await this.#api.backend.invoke("spawn", { threadId, spinoffId: spinoff.id } satisfies SpawnParams)) as Partial<SpawnResult> | null;
+        const result = (await this.#api.backend.invoke("spawn", { threadId, spinoffId: spinoff.id, ...this.#onHost(threadId) } satisfies SpawnParams)) as Partial<SpawnResult> | null;
         if (typeof result?.childThreadId === "string" && result.childThreadId) opened.child = result.childThreadId;
+        if (isRemoteHostId(result?.hostId)) opened.host = result.hostId;
       } catch (error) {
         // codexhost has not answered in time: the child may still open, and the next snapshot shows it. No failure.
         if (errorCodeOf(error) !== "PENDING") throw error;
@@ -544,7 +555,7 @@ class OverviewPage {
       }
     }, focus);
     this.#spawning.delete(key);
-    if (ok) this.#showNotice(opened.pending ?? this.#t.spawnedNotice(spinoff.text), opened.child);
+    if (ok) this.#showNotice(opened.pending ?? this.#t.spawnedNotice(spinoff.text), opened.child, opened.host);
     this.#render(true);
   }
 
@@ -599,8 +610,13 @@ class OverviewPage {
     return [...(opener ? [opener] : []), `integration:${agent}:preview`, `integration:${agent}:install`, `integration:${agent}:uninstall`];
   }
 
-  #openThread(threadId: string): void {
-    const detail: { threadId: string; handled?: boolean; result?: Promise<void> } = { threadId };
+  /**
+   * Opens a conversation in the surface the page runs in. One on another computer names its remote
+   * host (`hostId`, else what the snapshot says); codexhost Web opens it by its `web-remote:` session.
+   */
+  #openThread(threadId: string, hostId: string | undefined = this.#onHost(threadId).hostId): void {
+    const host = isRemoteHostId(hostId) ? hostId : undefined;
+    const detail: { threadId: string; hostId?: string; handled?: boolean; result?: Promise<void> } = { threadId, ...(host ? { hostId: host } : {}) };
     const view = this.#doc.defaultView;
     view?.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail }));
     // The surface that opened it says when it could not (on Desktop: a conversation of another machine).
@@ -611,13 +627,13 @@ class OverviewPage {
     });
     if (detail.handled || this.#api.hostTarget !== "web" || !view) return;
     const url = new URL(view.location.href);
-    url.searchParams.set("session", threadId);
+    url.searchParams.set("session", webSessionId(threadId, host));
     view.location.assign(url.href);
   }
 
-  #showNotice(text: string, threadId?: string): void {
+  #showNotice(text: string, threadId?: string, hostId?: string): void {
     clearTimeout(this.#noticeTimer);
-    this.#notice = { text, ...(threadId ? { threadId } : {}) };
+    this.#notice = { text, ...(threadId ? { threadId } : {}), ...(hostId ? { hostId } : {}) };
     this.#renderMessages();
     this.#noticeTimer = setTimeout(() => this.#clearNotice(), NOTICE_MS);
   }
@@ -755,7 +771,7 @@ class OverviewPage {
         result.draft ? h("span", { class: "mlp-badge mlp-draft", text: t.draft }) : this.#statusBadge(result.status),
         h("span", { class: "mlp-spacer" }),
         h("span", { class: "mlp-meta mlp-live", text: t.threadStatus[status] }),
-        this.#button(t.jump, () => this.#openThread(result.threadId), "mlp-btn-sm"),
+        this.#button(t.jump, () => this.#openThread(result.threadId, result.hostId ?? this.#onHost(result.threadId).hostId), "mlp-btn-sm"),
       ),
       result.tags.length ? this.#tags(result.tags) : null,
       h(
@@ -887,7 +903,7 @@ class OverviewPage {
           "div",
           { class: "mlp-notice", attrs: { role: "status" } },
           h("span", { class: "mlp-main", text: notice.text }),
-          child ? this.#button(t.jump, () => this.#openThread(child), "mlp-btn-sm") : null,
+          child ? this.#button(t.jump, () => this.#openThread(child, notice.hostId ?? this.#onHost(child).hostId), "mlp-btn-sm") : null,
           this.#iconButton("close", t.close, () => this.#clearNotice()),
         ),
       );
@@ -1805,7 +1821,8 @@ class OverviewPage {
   async #revealFavorite(item: FavoriteExcerpt): Promise<void> {
     try {
       const result = (await this.#api.backend.invoke("favorites.reveal", { id: item.id })) as { threadId?: unknown } | null;
-      this.#openThread(typeof result?.threadId === "string" ? result.threadId : item.threadId);
+      const hostId = (result as { hostId?: unknown } | null)?.hostId;
+      this.#openThread(typeof result?.threadId === "string" ? result.threadId : item.threadId, isRemoteHostId(hostId) ? hostId : item.hostId);
     } catch (error) {
       this.#error = { kind: "action", text: this.#message(error) };
       this.#render(true);
@@ -1934,7 +1951,7 @@ class OverviewPage {
           t.jump,
           () => {
             if (unseen) void this.#api.backend.invoke("refs.seen", { key: ref.key }).then(() => this.#loadRefs());
-            this.#openThread(origin.threadId);
+            this.#openThread(origin.threadId, origin.hostId ?? this.#onHost(origin.threadId).hostId);
           },
           "",
           `ref-jump:${ref.key}`,
@@ -2206,7 +2223,7 @@ class OverviewPage {
   }
 
   async #summarize(threadId: string): Promise<void> {
-    if (await this.#act(() => this.#api.backend.invoke("summarize", { threadId }))) this.#showNotice(this.#t.summarizeQueued);
+    if (await this.#act(() => this.#api.backend.invoke("summarize", { threadId, ...this.#onHost(threadId) }))) this.#showNotice(this.#t.summarizeQueued);
   }
 
   /** "You changed … by hand", with the way back to automatic summaries. */
@@ -2283,6 +2300,13 @@ function readInfo(value: unknown): Record<string, ThreadInfo> {
     };
   }
   return info;
+}
+
+/** Conversations on other computers and their remote hosts; anything else is left out. */
+function readHosts(value: unknown): Record<string, string> {
+  const hosts: Record<string, string> = {};
+  if (isRecord(value)) for (const [threadId, hostId] of Object.entries(value)) if (isThreadId(threadId) && isRemoteHostId(hostId)) hosts[threadId] = hostId;
+  return hosts;
 }
 
 function readParents(value: unknown): Record<string, string> {

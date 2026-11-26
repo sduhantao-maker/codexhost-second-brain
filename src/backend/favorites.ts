@@ -21,6 +21,8 @@ export class FavoritesService {
     private readonly api: Pick<ExternalApi, "readTurns">,
     private readonly log: Log,
     private readonly now: () => number = Date.now,
+    /** The remote host a conversation runs on, for one the passage did not name a host for. */
+    private readonly hostOf: (threadId: string) => string | undefined = () => undefined,
   ) {}
 
   /** Changes whenever the file is replaced. */
@@ -64,14 +66,15 @@ export class FavoritesService {
     void tracked.finally(() => this.#pending.delete(tracked));
   }
 
-  /** Looks through the latest turns, then further back, and notes the turn and speaker found. */
+  /** Looks through the latest turns, then further back, and notes the turn and speaker found. On its remote host for a conversation on another computer. */
   async #locate(favorite: Favorite): Promise<void> {
-    const latest = await this.api.readTurns(favorite.threadId);
+    const hostId = favorite.hostId ?? this.hostOf(favorite.threadId);
+    const latest = await this.api.readTurns(favorite.threadId, undefined, hostId);
     let found = locatePassage(favorite.text, latest.turns);
     const oldest = latest.turns.reduce((min, turn) => Math.min(min, turn.turnNumber), Number.POSITIVE_INFINITY);
     for (let to = oldest - 1; !found && Number.isFinite(to) && to >= 1 && oldest - to <= LOOK_BACK; to -= CHUNK) {
       const from = Math.max(1, to - CHUNK + 1);
-      found = locatePassage(favorite.text, (await this.api.readTurns(favorite.threadId, { from, to })).turns);
+      found = locatePassage(favorite.text, (await this.api.readTurns(favorite.threadId, { from, to }, hostId)).turns);
     }
     if (!found) return;
     const where = found;

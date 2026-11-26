@@ -9,12 +9,28 @@
  * together once a round is over, at the latest after a minute, instead of rewriting the index
  * for every conversation read. Every complete listing forgets the conversations codexhost no
  * longer has, unless a PR or issue names them or the backend keeps them.
+ *
+ * Conversations on other computers (remote hosts paired with codexhost Web) are read the same way,
+ * on their host: a full pass lists every host that can be reached, and the recent passes take what
+ * each host listed last (`remote.listed`). Their records name their host, and are never forgotten
+ * for being missing from this machine's list. One whose host cannot be reached is left for later.
  */
+import { shortHost } from "../core/hosts.js";
 import { requestOf } from "../core/model.js";
 import { addMention, extractLinks, folderName, pruneThreads, type Link, type Mention, type RefIndex, type ScanRecord } from "../core/refs.js";
 import { readIndex, updateIndex, type RefsPaths } from "../node/refs-store.js";
 import { HttpError, type ApiTurn, type ExternalApi, type ListedThread } from "./external-api.js";
 import type { Log } from "./log.js";
+
+/** Conversations on other computers: the hosts, whether each can be reached, and what each listed last. */
+export interface ScannerRemote {
+  hosts(): string[];
+  down(hostId: string): boolean;
+  /** The latest list of every host that can be reached, each entry naming its host. */
+  listed(): ListedThread[];
+  /** A read on that host failed as if it could not be reached. */
+  failed?(hostId: string, error: unknown): void;
+}
 
 const LIST_PAGE = 100;
 const RECENT_PAGE = 50;
@@ -33,6 +49,7 @@ export interface ScannerOptions {
   recentEveryMs(): number;
   /** Conversations to keep in the index even when codexhost no longer lists them. */
   keep?(): Iterable<string> | Promise<Iterable<string>>;
+  remote?: ScannerRemote;
   now?(): number;
   pauseMs?: number;
 }
@@ -58,6 +75,8 @@ export class Scanner {
   #crawling = false;
   /** When this process last listed every conversation; every start does one pass. */
   #fullPassAt = 0;
+  /** Hosts already paged in full since the latest full pass on this machine. */
+  readonly #listedHosts = new Set<string>();
   #lastRecentAt = 0;
   #timer: ReturnType<typeof setTimeout> | undefined;
   #started = false;
@@ -115,16 +134,23 @@ export class Scanner {
       // A round is over, or what is held has waited long enough: write it.
       if (this.#held.size && (!this.#queue.length || this.#held.size >= HOLD_MAX || this.#now() - this.#heldSince >= HOLD_MS)) await this.#write();
       const thread = this.#queue.shift();
-      if (thread) {
+      if (thread?.hostId && this.options.remote?.down(thread.hostId)) {
+        // Its host cannot be reached now: a later listing brings it back, as its record did not change.
+        this.#queued.delete(thread.threadId);
+      } else if (thread) {
         this.#queued.delete(thread.threadId);
         try {
           await this.#scan(thread);
         } catch (error) {
           // codexhost answering 4xx is not going to change soon; anything else may be a slow moment.
-          const refused = error instanceof HttpError && error.status >= 400 && error.status < 500;
+          // On another computer, codexhost not reaching the host says nothing of the conversation.
+          const remoteDown = thread.hostId !== undefined && (!(error instanceof HttpError) || error.status >= 500 || error.code === "RUNTIME_UNREACHABLE");
+          if (remoteDown) this.options.remote?.failed?.(thread.hostId!, error);
+          const refused = !remoteDown && error instanceof HttpError && error.status >= 400 && error.status < 500;
+          const where = thread.hostId ? ` on remote host ${shortHost(thread.hostId)}` : "";
           if (thread.attempts + 1 < ATTEMPTS) this.#push({ ...thread, attempts: thread.attempts + 1 });
           else if (refused) await this.#markUnreadable(thread);
-          else this.log.error(`skip conversation ${thread.threadId.slice(0, 8)} after ${ATTEMPTS} attempts`, error);
+          else this.log.error(`skip conversation ${thread.threadId.slice(0, 8)}${where} after ${ATTEMPTS} attempts`, error);
           delay = Math.max(delay, refused ? 500 : 2000);
         }
       } else if (this.#crawling) {
@@ -196,6 +222,8 @@ export class Scanner {
     } while (cursor);
     const all = [...byId.values()];
     this.#enqueue(all, index);
+    this.#listedHosts.clear();
+    await this.#discoverHosts(index);
     const now = this.#now();
     this.#fullPassAt = now;
     this.#crawling = true;
@@ -229,10 +257,41 @@ export class Scanner {
     if (doubted !== undefined) this.log.info(`kept every conversation: codexhost listed ${all.length}, the last full listing ${doubted}`);
   }
 
+  /** Every conversation of one remote host, each entry naming it. */
+  async #listHost(hostId: string): Promise<ListedThread[]> {
+    const byId = new Map<string, ListedThread>();
+    let cursor: string | undefined;
+    do {
+      await sleep(this.#pause());
+      const page = await this.api.listThreads({ limit: LIST_PAGE, hostId, ...(cursor ? { cursor } : {}) });
+      for (const thread of page.threads) if (!byId.has(thread.threadId)) byId.set(thread.threadId, { ...thread, hostId });
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor && !this.#stopped);
+    return [...byId.values()];
+  }
+
+  /** A host may be paired or reconnect after the local pass. Page it in full on the next round. */
+  async #discoverHosts(index: RefIndex): Promise<void> {
+    const remote = this.options.remote;
+    if (!remote) return;
+    for (const hostId of remote.hosts()) {
+      if (this.#stopped || this.#listedHosts.has(hostId) || remote.down(hostId)) continue;
+      try {
+        this.#enqueue(await this.#listHost(hostId), index);
+        this.#listedHosts.add(hostId);
+      } catch (error) {
+        remote.failed?.(hostId, error);
+      }
+    }
+  }
+
   async #listRecent(index: RefIndex): Promise<void> {
     this.#lastRecentAt = this.#now();
     const page = await this.api.listThreads({ limit: RECENT_PAGE });
     this.#enqueue(page.threads, index);
+    // What the remote hosts listed last (RemoteHosts lists them now and then).
+    this.#enqueue(this.options.remote?.listed() ?? [], index);
+    await this.#discoverHosts(index);
   }
 
   /** Remembers a conversation codexhost cannot read, until it changes. */
@@ -245,6 +304,7 @@ export class Scanner {
         scannedAt: now,
         unreadable: true,
         ...(thread.title ? { title: thread.title } : {}),
+        ...(thread.hostId ? { hostId: thread.hostId } : {}),
       };
     });
   }
@@ -252,14 +312,16 @@ export class Scanner {
   async #scan(thread: ListedThread): Promise<void> {
     const known = this.#known(await readIndex(this.paths), thread.threadId);
     const from = (known?.turns ?? 0) + 1;
-    const latest = await this.api.readTurns(thread.threadId);
+    // On another computer: read on its host.
+    const hostId = thread.hostId;
+    const latest = await this.api.readTurns(thread.threadId, undefined, hostId);
     const total = latest.totalTurns;
     const turns = new Map<number, ApiTurn>(latest.turns.map((turn) => [turn.turnNumber, turn]));
     const lowest = latest.turns.reduce((min, turn) => Math.min(min, turn.turnNumber), total + 1);
     for (let start = from; start < lowest; start += CHUNK) {
       await sleep(this.#pause());
       const end = Math.min(start + CHUNK - 1, lowest - 1);
-      for (const turn of (await this.api.readTurns(thread.threadId, { from: start, to: end })).turns) turns.set(turn.turnNumber, turn);
+      for (const turn of (await this.api.readTurns(thread.threadId, { from: start, to: end }, hostId)).turns) turns.set(turn.turnNumber, turn);
     }
     const scanned = unfinished(turns.get(total)) ? total - 1 : total;
     const now = this.#now();
@@ -297,6 +359,7 @@ export class Scanner {
       ...(cwd ? { cwd } : {}),
       ...(keptFirst ? { firstPrompt: keptFirst } : {}),
       ...(harnessId ? { harnessId } : {}),
+      ...(hostId ? { hostId } : {}),
     };
     let quiet = false;
     const held = [...this.#held];

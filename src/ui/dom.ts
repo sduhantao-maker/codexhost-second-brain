@@ -87,3 +87,29 @@ export function adoptStyles(root: ShadowRoot, css: string): void {
   style.textContent = css;
   root.append(style);
 }
+
+/**
+ * Adds style rules to the page itself (not to a shadow root), for the host's own elements: as a
+ * constructed sheet where the page takes one, else as a style element. Returns what takes them off
+ * again.
+ */
+export function documentStyles(doc: Document, css: string): () => void {
+  const Sheet = doc.defaultView?.CSSStyleSheet;
+  if (Sheet && "adoptedStyleSheets" in doc) {
+    try {
+      const sheet = new Sheet();
+      sheet.replaceSync(css);
+      doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
+      return () => {
+        doc.adoptedStyleSheets = doc.adoptedStyleSheets.filter((item) => item !== sheet);
+      };
+    } catch {
+      // Fall back to a style element below.
+    }
+  }
+  const style = doc.createElement("style");
+  style.setAttribute("data-codexhost-mainline-styles", "");
+  style.textContent = css;
+  (doc.head ?? doc.documentElement).append(style);
+  return () => style.remove();
+}

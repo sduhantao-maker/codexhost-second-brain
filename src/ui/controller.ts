@@ -18,6 +18,8 @@ export interface LiveData {
   alerts: RefView[];
   /** Known delegation links, child to parent. */
   parents: Record<string, string>;
+  /** Conversations the snapshot names that run on another computer, with their remote host. */
+  hosts?: Record<string, string>;
   /** A saved passage to show in the open conversation. */
   reveal?: Reveal;
 }
@@ -28,7 +30,13 @@ export interface SurfaceAdapter {
   invoke(method: string, params?: unknown): Promise<unknown>;
   /** Reports the open conversation now and on every change; null when none is open. */
   watchCurrentThread(onChange: (threadId: string | null) => void): () => void;
-  openThread(threadId: string): void;
+  /** Opens a conversation; `hostId` names its remote host when it is on another computer (the surface may know it itself). */
+  openThread(threadId: string, hostId?: string): void;
+  /**
+   * The remote host a conversation runs on, when the surface shows conversations of other computers
+   * (codexhost Web) and knows this one is: every call that names it names its host too.
+   */
+  hostOf?(threadId: string): string | undefined;
   anchor(): Anchor | null;
   /** Puts the capsule on the page; the returned function takes it off again. */
   mount(host: HTMLElement): (() => void) | void;
@@ -41,8 +49,8 @@ export interface SurfaceAdapter {
   dispose?(): void;
   /** The sidebar's scrolling container, where conversation rows live. */
   sidebar?(): Element | null;
-  /** The conversation row under an event target, with its Thread id. */
-  rowAt?(target: EventTarget | null): { element: HTMLElement; threadId: string } | null;
+  /** The conversation row under an event target, with its Thread id (and its remote host, for one on another computer). */
+  rowAt?(target: EventTarget | null): { element: HTMLElement; threadId: string; hostId?: string } | null;
   /** The sidebar rows that show a conversation (it may be listed more than once). */
   rowsFor?(threadId: string): HTMLElement[];
 }
@@ -103,6 +111,12 @@ export function clientId(view: Window | null): string {
   return `c${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12).padEnd(10, "0")}`;
 }
 
+/** The `hostId` a call names a conversation's remote host by, when the surface knows it is on another computer; nothing for a local one. */
+export function hostParams(adapter: Pick<SurfaceAdapter, "hostOf">, threadId: string | null | undefined): { hostId?: string } {
+  const hostId = threadId ? adapter.hostOf?.(threadId) : undefined;
+  return hostId ? { hostId } : {};
+}
+
 export function startController(adapter: SurfaceAdapter): ControllerHandle {
   const doc = adapter.doc;
   const view = doc.defaultView;
@@ -160,15 +174,15 @@ export function startController(adapter: SurfaceAdapter): ControllerHandle {
         locale,
         surface: adapter.surface,
         mutate: async (params: MutateV2Params) => {
-          await adapter.invoke("mutate", params);
+          await adapter.invoke("mutate", { ...params, ...hostParams(adapter, params.threadId) });
           await refresh();
         },
         spawn: async (spinoffId: string) => {
           if (!current) return;
-          await adapter.invoke("spawn", { threadId: current, spinoffId });
+          await adapter.invoke("spawn", { threadId: current, spinoffId, ...hostParams(adapter, current) });
           await refresh();
         },
-        openThread: (threadId) => adapter.openThread(threadId),
+        openThread: (threadId, hostId) => (hostId ? adapter.openThread(threadId, hostId) : adapter.openThread(threadId)),
         call: (method, params) => adapter.invoke(method, params),
         anchor: () => adapter.anchor(),
         storage: safeStorage(view),
@@ -208,7 +222,7 @@ export function startController(adapter: SurfaceAdapter): ControllerHandle {
     if (loading === key) return;
     loading = key;
     try {
-      const next = (await adapter.invoke("conversation", { threadId })) as ConversationView;
+      const next = (await adapter.invoke("conversation", { threadId, ...hostParams(adapter, threadId) })) as ConversationView;
       if (disposed || current !== threadId) return;
       loaded = { threadId, version, view: next };
       render();
@@ -232,7 +246,7 @@ export function startController(adapter: SurfaceAdapter): ControllerHandle {
     const params: SnapshotParams = {
       client,
       ...(data ? { version: data.version } : {}),
-      ...(current ? { focus: { threadId: current, surface: adapter.surface } } : {}),
+      ...(current ? { focus: { threadId: current, surface: adapter.surface, ...hostParams(adapter, current) } } : {}),
       ...(localeSent ? {} : { locale, localeSource: "surface" as const }),
     };
     try {
@@ -249,6 +263,7 @@ export function startController(adapter: SurfaceAdapter): ControllerHandle {
           version: result.version,
           alerts: result.alerts ?? [],
           parents: result.parents ?? {},
+          hosts: result.hosts ?? {},
           ...(result.command ? { command: result.command } : {}),
           ...(result.reveal ? { reveal: result.reveal } : {}),
         };

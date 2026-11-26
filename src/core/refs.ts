@@ -3,6 +3,7 @@
  * where it showed up, what the user had asked in that turn, and whether it has news on GitHub.
  * It answers "the maintainer replied to #42 — which window was that, and what was it for?"
  */
+import { isRemoteHostId } from "./hosts.js";
 import { isThreadId } from "./model.js";
 import { maskSecrets } from "./redact.js";
 
@@ -68,6 +69,8 @@ export interface ScanRecord {
    * …), so the backfill knows without a read which conversations go to no model.
    */
   harnessId?: string;
+  /** The remote host it runs on (`remote-peer:…`) when it is on another computer; none when local. */
+  hostId?: string;
 }
 
 export interface RefIndex {
@@ -357,7 +360,8 @@ export function maskIndexText(index: RefIndex): { requests: number; firstPrompts
 /**
  * Forgets the conversations a complete listing of codexhost no longer has (deleted or archived):
  * those that no PR or issue names and that `keep` does not hold on to (the backend keeps those
- * with a mainline, a last request or a saved passage). Returns how many went.
+ * with a mainline, a last request or a saved passage). Conversations on other computers are never
+ * in this machine's listing, so their records stay. Returns how many went.
  */
 export function pruneThreads(index: RefIndex, listed: ReadonlySet<string>, keep: ReadonlySet<string> = new Set()): number {
   const named = new Set<string>();
@@ -367,7 +371,7 @@ export function pruneThreads(index: RefIndex, listed: ReadonlySet<string>, keep:
   }
   let pruned = 0;
   for (const threadId of Object.keys(index.threads))
-    if (!listed.has(threadId) && !named.has(threadId) && !keep.has(threadId)) {
+    if (!listed.has(threadId) && !named.has(threadId) && !keep.has(threadId) && !index.threads[threadId]!.hostId) {
       delete index.threads[threadId];
       pruned += 1;
     }
@@ -404,7 +408,7 @@ export function shownContent(index: RefIndex): unknown {
     .sort()
     .map((threadId) => {
       const record = index.threads[threadId]!;
-      return [threadId, record.title ?? null, record.cwd ? folderName(record.cwd) : null, record.firstPrompt ?? null];
+      return [threadId, record.title ?? null, record.cwd ? folderName(record.cwd) : null, record.firstPrompt ?? null, record.hostId ?? null];
     });
   return { refs, threads };
 }
@@ -475,6 +479,7 @@ export function normalizeIndex(raw: unknown): RefIndex {
         ...(typeof value.cwd === "string" && value.cwd ? { cwd: value.cwd } : {}),
         ...(typeof value.firstPrompt === "string" && value.firstPrompt ? { firstPrompt: value.firstPrompt } : {}),
         ...(typeof value.harnessId === "string" && value.harnessId ? { harnessId: value.harnessId.slice(0, 64) } : {}),
+        ...(isRemoteHostId(value.hostId) ? { hostId: value.hostId } : {}),
       };
     }
   if (isRecord(raw.crawl))
@@ -505,16 +510,23 @@ export interface RefView {
   url: string;
   title?: string;
   state?: RefState;
-  origin?: { threadId: string; title?: string; turn: number; prompt?: string };
+  /** Where it came from; `hostId` names the remote host of a conversation on another computer. */
+  origin?: { threadId: string; title?: string; turn: number; prompt?: string; hostId?: string };
   windows: number;
   note?: string;
   activity?: { at: number; reason: string; unseen: boolean };
   lastMentionAt: number;
 }
 
-export function refView(index: RefIndex, ref: Ref, titleOf: (threadId: string) => string | undefined): RefView {
+export function refView(
+  index: RefIndex,
+  ref: Ref,
+  titleOf: (threadId: string) => string | undefined,
+  hostOf: (threadId: string) => string | undefined = (threadId) => index.threads[threadId]?.hostId,
+): RefView {
   const first = origin(ref);
   const title = first ? (titleOf(first.threadId) ?? index.threads[first.threadId]?.title) : undefined;
+  const hostId = first ? hostOf(first.threadId) : undefined;
   return {
     key: ref.key,
     repo: ref.repo,
@@ -526,7 +538,15 @@ export function refView(index: RefIndex, ref: Ref, titleOf: (threadId: string) =
     ...(ref.title ? { title: ref.title } : {}),
     ...(ref.state ? { state: ref.state } : {}),
     ...(first
-      ? { origin: { threadId: first.threadId, turn: first.turn, ...(title ? { title } : {}), ...(first.prompt ? { prompt: first.prompt } : {}) } }
+      ? {
+          origin: {
+            threadId: first.threadId,
+            turn: first.turn,
+            ...(title ? { title } : {}),
+            ...(first.prompt ? { prompt: first.prompt } : {}),
+            ...(hostId && isRemoteHostId(hostId) ? { hostId } : {}),
+          },
+        }
       : {}),
     ...(ref.note ? { note: ref.note.text } : {}),
     ...(ref.activity ? { activity: ref.activity } : {}),

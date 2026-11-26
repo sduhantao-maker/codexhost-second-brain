@@ -175,6 +175,16 @@ describe("summarizer", () => {
     expect(env.calls).toHaveLength(0);
   });
 
+  it("does not spend another call on stale work from an overlapping automatic poll", async () => {
+    const env = setup({ listed: [{ threadId: "t1", updatedAt: iso(2) }] });
+    await env.summarizer.tick();
+    await env.settle();
+    expect(env.calls).toHaveLength(1);
+    env.summarizer.enqueue({ threadId: "t1", reason: "auto", updatedAt: iso(2) });
+    await env.settle();
+    expect(env.calls).toHaveLength(1);
+  });
+
   it("works through every older conversation once, then clears the job", async () => {
     const index = emptyIndex();
     for (const [id, minutes] of [["a", 60 * 24 * 40], ["b", 60 * 24 * 10], ["gone", 60], ["empty", 60]] as const)

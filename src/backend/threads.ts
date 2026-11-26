@@ -12,11 +12,34 @@
  * - Reads wait in one queue, two at a time; an id counts as asked for from the moment it is
  *   queued, so polls that overlap never read it twice. A read that fails waits a minute before the
  *   next try, then twice as long each time up to a cap, and is logged once per step.
+ * - A conversation on another computer (a remote host) is read on that host, in a queue of its own,
+ *   one at a time, so that a slow host never holds up the reads of this machine; while its host
+ *   cannot be reached it is not read at all. Its host's list (`noteListed`) counts like the list of
+ *   this machine.
  */
+import { shortHost } from "../core/hosts.js";
 import type { ThreadInfo, ThreadStatus } from "../core/model.js";
 import type { TreeReport } from "../core/rpc.js";
-import { HttpError, type ExternalApi } from "./external-api.js";
+import { HttpError, type ExternalApi, type ListedThread } from "./external-api.js";
 import type { Log } from "./log.js";
+
+/** Where conversations run, for those on another computer (see RemoteHosts). */
+export interface ThreadHosts {
+  /** The remote host a conversation runs on; none for a local conversation. */
+  hostOf(threadId: string): string | undefined;
+  /** Whether that host cannot be reached now: its conversations are not read meanwhile. */
+  down(hostId: string): boolean;
+  /** A conversation found on a remote host (a child its list named). */
+  note?(threadId: string, hostId: string): void;
+  /** A read on that host failed as if it could not be reached. */
+  failed?(hostId: string, error: unknown): void;
+}
+
+export interface ThreadInfoOptions {
+  hosts?: ThreadHosts;
+  /** Reads conversations on other computers, which may take longer; `api` by default. */
+  remoteApi?: Pick<ExternalApi, "readThread" | "listChildren">;
+}
 
 type Source = "desktop" | "list" | "read";
 
@@ -53,8 +76,12 @@ const REFUSED_FIRST_MS = 10 * 60_000;
 const REFUSED_CAP_MS = 60 * 60_000;
 /** Reads under way at once. */
 export const READS_AT_ONCE = 2;
+/** Reads of conversations on other computers under way at once, beside those. */
+export const REMOTE_READS_AT_ONCE = 1;
 
 const live = (status: ThreadStatus | undefined) => status === "running" || status === "waiting";
+/** codexhost answered that it cannot reach the remote host: no answer about the conversation itself. */
+const unreachable = (error: unknown) => !(error instanceof HttpError) || error.status >= 500 || error.code === "RUNTIME_UNREACHABLE";
 
 export class ThreadInfoService {
   readonly #facts = new Map<string, Fact>();
@@ -74,19 +101,37 @@ export class ThreadInfoService {
   #listing: Promise<void> | undefined;
   #listFailure: Failure | undefined;
 
+  /** What each remote host's last list named (with its state), and when it came. */
+  readonly #remoteListed = new Map<string, { ids: Set<string>; at: number }>();
+
   /** When each Thread was last read on its own. */
   readonly #readAt = new Map<string, number>();
   readonly #failures = new Map<string, Failure>();
   /** Queued or being read, with what resolves when its read is over. */
   readonly #pending = new Map<string, Promise<void>>();
-  readonly #queue: Array<{ threadId: string; done: () => void }> = [];
+  /** This machine's reads, and those of conversations on other computers, each queue with its own count. */
+  readonly #queue: Array<{ threadId: string; hostId?: string; done: () => void }> = [];
+  readonly #remoteQueue: Array<{ threadId: string; hostId?: string; done: () => void }> = [];
   #reading = 0;
+  #remoteReading = 0;
+  readonly #hosts: ThreadHosts | undefined;
+  readonly #remoteApi: Pick<ExternalApi, "readThread" | "listChildren"> | undefined;
 
   constructor(
     private readonly api: ExternalApi | undefined,
     private readonly log: Log,
     private readonly now: () => number = Date.now,
-  ) {}
+    options: ThreadInfoOptions = {},
+  ) {
+    this.#hosts = options.hosts;
+    this.#remoteApi = options.remoteApi ?? api;
+  }
+
+  /** The remote host a conversation runs on, and whether it can be reached; none for a local conversation. */
+  #hostOf(threadId: string): { hostId: string; down: boolean } | undefined {
+    const hostId = this.#hosts?.hostOf(threadId);
+    return hostId ? { hostId, down: this.#hosts!.down(hostId) } : undefined;
+  }
 
   get version(): number {
     return this.#version;
@@ -111,23 +156,47 @@ export class ThreadInfoService {
 
   /** Asks codexhost for a conversation's delegated children, at most once a minute per parent. */
   async lookupChildren(parentId: string): Promise<boolean> {
-    if (!this.api || this.desktopFresh()) return false;
+    if (!this.api) return false;
+    // A conversation on another computer: its children are there too, and nothing goes to a host that cannot be reached.
+    const host = this.#hostOf(parentId);
+    if (host ? host.down : this.desktopFresh()) return false;
     const last = this.#childLookups.get(parentId) ?? 0;
     if (this.now() - last < 60_000) return false;
     this.#childLookups.set(parentId, this.now());
     let changed = false;
     try {
-      for (const child of await this.api.listChildren(parentId)) {
+      const children = host ? await this.#remoteApi!.listChildren(parentId, host.hostId) : await this.api.listChildren(parentId);
+      for (const child of children) {
         if (child.threadId === parentId) continue;
+        if (host) this.#hosts?.note?.(child.threadId, host.hostId);
         if (this.#apiParents.get(child.threadId) !== parentId) changed = true;
         this.#apiParents.set(child.threadId, parentId);
         // A list of children tells as much as the list of all Threads: running or not.
         this.#set(child.threadId, child, "list");
       }
     } catch (error) {
-      this.log.error(`list children of ${parentId.slice(0, 8)}`, error);
+      if (host && unreachable(error)) this.#hosts?.failed?.(host.hostId, error);
+      this.log.error(`list children of ${parentId.slice(0, 8)}${host ? ` on remote host ${shortHost(host.hostId)}` : ""}`, error);
     }
     return changed;
+  }
+
+  /**
+   * Takes a remote host's list (RemoteHosts lists each host now and then): titles, agents and
+   * states, which count like those of this machine's list.
+   */
+  noteListed(hostId: string, threads: readonly ListedThread[]): void {
+    for (const thread of threads)
+      this.#set(
+        thread.threadId,
+        {
+          status: thread.status ?? this.#facts.get(thread.threadId)?.status ?? "unknown",
+          ...(thread.title ? { title: thread.title } : {}),
+          ...(thread.harnessId ? { harnessId: thread.harnessId } : {}),
+        },
+        "list",
+      );
+    this.#remoteListed.set(hostId, { ids: new Set(threads.filter((thread) => thread.status).map((thread) => thread.threadId)), at: this.now() });
   }
 
   /** All facts known so far, for building views. */
@@ -216,7 +285,12 @@ export class ThreadInfoService {
     if (failure && now < failure.retryAt) return false;
     const fact = this.#facts.get(threadId);
     if (fact?.source === "desktop" && this.desktopFresh()) return false;
-    const listed = this.#listed.has(threadId) && now - this.#listedAt <= LIST_TRUSTED_MS;
+    const host = this.#hostOf(threadId);
+    if (host?.down) return false;
+    const remote = host ? this.#remoteListed.get(host.hostId) : undefined;
+    const listed = host
+      ? Boolean(remote?.ids.has(threadId) && now - remote.at <= LIST_TRUSTED_MS)
+      : this.#listed.has(threadId) && now - this.#listedAt <= LIST_TRUSTED_MS;
     // On the list and not running: the list said all there is to say.
     if (listed && !live(fact?.status)) return false;
     const maxAge = focused ? FOCUS_MAX_AGE_MS : live(fact?.status) ? RUNNING_MAX_AGE_MS : OTHER_MAX_AGE_MS;
@@ -261,35 +335,54 @@ export class ThreadInfoService {
   #enqueue(threadId: string): Promise<void> {
     const pending = this.#pending.get(threadId);
     if (pending) return pending;
-    const read = new Promise<void>((done) => this.#queue.push({ threadId, done }));
+    const hostId = this.#hosts?.hostOf(threadId);
+    const queue = hostId ? this.#remoteQueue : this.#queue;
+    const read = new Promise<void>((done) => queue.push({ threadId, ...(hostId ? { hostId } : {}), done }));
     this.#pending.set(threadId, read);
     this.#pump();
     return read;
   }
 
   #pump(): void {
+    const settle = (job: { threadId: string; done: () => void }) => {
+      this.#pending.delete(job.threadId);
+      job.done();
+      this.#pump();
+    };
     while (this.#reading < READS_AT_ONCE && this.#queue.length) {
       const job = this.#queue.shift()!;
       this.#reading += 1;
       void this.#read(job.threadId).finally(() => {
         this.#reading -= 1;
-        this.#pending.delete(job.threadId);
-        job.done();
-        this.#pump();
+        settle(job);
+      });
+    }
+    while (this.#remoteReading < REMOTE_READS_AT_ONCE && this.#remoteQueue.length) {
+      const job = this.#remoteQueue.shift()!;
+      this.#remoteReading += 1;
+      void this.#read(job.threadId, job.hostId).finally(() => {
+        this.#remoteReading -= 1;
+        settle(job);
       });
     }
   }
 
-  async #read(threadId: string): Promise<void> {
+  async #read(threadId: string, hostId?: string): Promise<void> {
+    // Its host became unreachable while the read waited: nothing is sent, and nothing failed.
+    if (hostId && this.#hosts?.down(hostId)) return;
     try {
-      const thread = await this.api!.readThread(threadId);
+      const thread = hostId ? await this.#remoteApi!.readThread(threadId, hostId) : await this.api!.readThread(threadId);
       this.#readAt.set(threadId, this.now());
       this.#failures.delete(threadId);
       if (thread) this.#set(threadId, thread, "read");
     } catch (error) {
-      // A refused id (4xx) is no Thread at all, such as an unsent draft: said once, asked again much later.
-      const refused = error instanceof HttpError && error.status >= 400 && error.status < 500;
-      this.#failures.set(threadId, this.#failed(`read Thread ${threadId.slice(0, 8)}`, error, this.#failures.get(threadId), refused));
+      // A refused id (4xx) is no Thread at all, such as one deleted meanwhile: said once, asked again
+      // much later. On another computer, codexhost not reaching the host says nothing of the conversation.
+      const remoteDown = hostId !== undefined && unreachable(error);
+      if (remoteDown) this.#hosts?.failed?.(hostId, error);
+      const refused = !remoteDown && error instanceof HttpError && error.status >= 400 && error.status < 500;
+      const where = hostId ? ` on remote host ${shortHost(hostId)}` : "";
+      this.#failures.set(threadId, this.#failed(`read Thread ${threadId.slice(0, 8)}${where}`, error, this.#failures.get(threadId), refused));
     }
   }
 

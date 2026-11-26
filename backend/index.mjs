@@ -95,9 +95,13 @@ function newId(taken, length = 4, random = Math.random) {
   throw new Error("Could not allocate an id");
 }
 var THREAD_ID = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,255}$/u;
+var DRAFT_ID = /^(?:draft-|client-new-thread:)/u;
 var OBJECT_KEYS = /* @__PURE__ */ new Set(["constructor", "prototype", "toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable"]);
+function isDraftId(value) {
+  return typeof value === "string" && DRAFT_ID.test(value);
+}
 function isThreadId(value) {
-  return typeof value === "string" && THREAD_ID.test(value) && !OBJECT_KEYS.has(value);
+  return typeof value === "string" && THREAD_ID.test(value) && !OBJECT_KEYS.has(value) && !isDraftId(value);
 }
 var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var isTime = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -202,6 +206,20 @@ function withoutAttachments(text3) {
 }
 function localeOf(value) {
   return typeof value === "string" && value.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+}
+
+// src/core/hosts.ts
+var REMOTE_HOST_ID = /^remote-peer:[a-zA-Z0-9_-]{1,64}$/u;
+var PREFIX = "remote-peer:";
+function isRemoteHostId(value) {
+  return typeof value === "string" && REMOTE_HOST_ID.test(value);
+}
+function shortHost(hostId) {
+  return hostId.startsWith(PREFIX) ? hostId.slice(PREFIX.length, PREFIX.length + 8) : "?";
+}
+var HOST_STATES = /* @__PURE__ */ new Set(["connected", "connecting", "auth-error", "offline", "disabled"]);
+function hostState(value) {
+  return typeof value === "string" && HOST_STATES.has(value) ? value : "unknown";
 }
 
 // src/core/conversation.ts
@@ -311,6 +329,7 @@ function readConversation(threadId, value) {
   if (now) conversation.now = now;
   if (isThreadId(value.relatedTo) && value.relatedTo !== threadId) conversation.relatedTo = value.relatedTo;
   if (isThreadId(value.parentId) && value.parentId !== threadId) conversation.parentId = value.parentId;
+  if (isRemoteHostId(value.hostId)) conversation.hostId = value.hostId;
   if (isRecord2(value.pinned)) {
     const pinned = {};
     for (const field of PINNED_FIELDS) if (value.pinned[field] === true) pinned[field] = true;
@@ -727,6 +746,17 @@ function noteParents(state, parents) {
   }
   return changed;
 }
+function noteHosts(state, hosts) {
+  let changed = false;
+  for (const [threadId, hostId] of hosts) {
+    const conversation = recordOf(state, threadId);
+    if (conversation && isRemoteHostId(hostId) && conversation.hostId !== hostId) {
+      conversation.hostId = hostId;
+      changed = true;
+    }
+  }
+  return changed;
+}
 var MAX_CONVERSATIONS = 2e3;
 function keptByCap(conversation) {
   if (conversation.pinned && Object.keys(conversation.pinned).length) return true;
@@ -1006,6 +1036,7 @@ function readFavorite(value) {
   return {
     id: value.id,
     threadId: value.threadId,
+    ...isRemoteHostId(value.hostId) ? { hostId: value.hostId } : {},
     text: clip(value.text, FAVORITE_LIMITS.text),
     ...value.role === "agent" || value.role === "user" ? { role: value.role } : {},
     ...typeof value.turn === "number" && Number.isSafeInteger(value.turn) && value.turn > 0 ? { turn: value.turn } : {},
@@ -1027,11 +1058,15 @@ function addFavorite(file, input, now, random) {
   const text3 = cleanPassage(input.text);
   if (!text3) throw new MainlineError("EMPTY_TEXT", "Nothing to save");
   const existing = file.items.find((item) => item.threadId === input.threadId && flatten(item.text) === flatten(text3));
-  if (existing) return { favorite: existing, added: false };
+  if (existing) {
+    if (!existing.hostId && isRemoteHostId(input.hostId)) existing.hostId = input.hostId;
+    return { favorite: existing, added: false };
+  }
   const taken = new Set(file.items.map(({ id }) => id));
   const favorite = {
     id: newId((id) => taken.has(id), 6, random),
     threadId: input.threadId,
+    ...isRemoteHostId(input.hostId) ? { hostId: input.hostId } : {},
     text: clip(text3, FAVORITE_LIMITS.text),
     ...input.role ? { role: input.role } : {},
     ...input.turn && Number.isSafeInteger(input.turn) && input.turn > 0 ? { turn: input.turn } : {},
@@ -1266,7 +1301,7 @@ function pruneThreads(index, listed, keep = /* @__PURE__ */ new Set()) {
   }
   let pruned = 0;
   for (const threadId of Object.keys(index.threads))
-    if (!listed.has(threadId) && !named.has(threadId) && !keep.has(threadId)) {
+    if (!listed.has(threadId) && !named.has(threadId) && !keep.has(threadId) && !index.threads[threadId].hostId) {
       delete index.threads[threadId];
       pruned += 1;
     }
@@ -1291,7 +1326,7 @@ function shownContent(index) {
   });
   const threads = Object.keys(index.threads).sort().map((threadId) => {
     const record = index.threads[threadId];
-    return [threadId, record.title ?? null, record.cwd ? folderName(record.cwd) : null, record.firstPrompt ?? null];
+    return [threadId, record.title ?? null, record.cwd ? folderName(record.cwd) : null, record.firstPrompt ?? null, record.hostId ?? null];
   });
   return { refs, threads };
 }
@@ -1352,7 +1387,8 @@ function normalizeIndex(raw) {
         ...value.unreadable === true ? { unreadable: true } : {},
         ...typeof value.cwd === "string" && value.cwd ? { cwd: value.cwd } : {},
         ...typeof value.firstPrompt === "string" && value.firstPrompt ? { firstPrompt: value.firstPrompt } : {},
-        ...typeof value.harnessId === "string" && value.harnessId ? { harnessId: value.harnessId.slice(0, 64) } : {}
+        ...typeof value.harnessId === "string" && value.harnessId ? { harnessId: value.harnessId.slice(0, 64) } : {},
+        ...isRemoteHostId(value.hostId) ? { hostId: value.hostId } : {}
       };
     }
   if (isRecord4(raw.crawl))
@@ -1371,9 +1407,10 @@ function normalizeIndex(raw) {
     };
   return index;
 }
-function refView(index, ref, titleOf2) {
+function refView(index, ref, titleOf2, hostOf = (threadId) => index.threads[threadId]?.hostId) {
   const first = origin(ref);
   const title = first ? titleOf2(first.threadId) ?? index.threads[first.threadId]?.title : void 0;
+  const hostId = first ? hostOf(first.threadId) : void 0;
   return {
     key: ref.key,
     repo: ref.repo,
@@ -1384,7 +1421,15 @@ function refView(index, ref, titleOf2) {
     lastMentionAt: ref.lastMentionAt,
     ...ref.title ? { title: ref.title } : {},
     ...ref.state ? { state: ref.state } : {},
-    ...first ? { origin: { threadId: first.threadId, turn: first.turn, ...title ? { title } : {}, ...first.prompt ? { prompt: first.prompt } : {} } } : {},
+    ...first ? {
+      origin: {
+        threadId: first.threadId,
+        turn: first.turn,
+        ...title ? { title } : {},
+        ...first.prompt ? { prompt: first.prompt } : {},
+        ...hostId && isRemoteHostId(hostId) ? { hostId } : {}
+      }
+    } : {},
     ...ref.note ? { note: ref.note.text } : {},
     ...ref.activity ? { activity: ref.activity } : {}
   };
@@ -1593,16 +1638,18 @@ function childTask(request) {
   ].join("\n");
 }
 async function spawnChild(api, request) {
-  const parent = await api.readThread(request.parentThreadId);
+  const hostId = isRemoteHostId(request.hostId) ? request.hostId : void 0;
+  const parent = await api.readThread(request.parentThreadId, hostId);
   const harnessId = request.harnessId ?? parent?.harnessId ?? "claude-code";
-  const cwd = await api.threadCwd?.(request.parentThreadId);
+  const cwd = await api.threadCwd?.(request.parentThreadId, hostId);
   const name = Array.from(request.problem.replace(/\s+/gu, " ").trim()).slice(0, 60).join("");
   const started = await api.startDelegation({
     harnessId,
     task: withAttachments(childTask(request), request.attachments ?? []),
     taskName: name,
     parentThreadId: request.parentThreadId,
-    ...cwd ? { cwd } : {}
+    ...cwd ? { cwd } : {},
+    ...hostId ? { hostId } : {}
   });
   return started.threadId;
 }
@@ -1997,12 +2044,14 @@ function leftOf(startedAt, budget = HANDLER_BUDGET_MS, now = Date.now()) {
 // src/node/external-api.ts
 import { readFile as readFile2, stat as stat2 } from "node:fs/promises";
 var HttpError = class extends Error {
-  constructor(status, message) {
+  constructor(status, message, code3) {
     super(message);
     this.status = status;
+    this.code = code3;
     this.name = "HttpError";
   }
   status;
+  code;
 };
 var ApiNotReachedError = class extends Error {
   constructor(message, options) {
@@ -2019,8 +2068,9 @@ function normalizeStatus(status, pendingQuestions) {
   return "idle";
 }
 var isRecord6 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var onHost = (hostId) => isRemoteHostId(hostId) ? { hostId } : {};
 function toThread(raw) {
-  if (!isRecord6(raw) || typeof raw.threadId !== "string") return void 0;
+  if (!isRecord6(raw) || !isThreadId(raw.threadId)) return void 0;
   return {
     threadId: raw.threadId,
     status: normalizeStatus(raw.status, raw.pendingQuestions),
@@ -2071,22 +2121,31 @@ var ExternalApi = class {
       body: JSON.stringify(body),
       signal: this.signal ? AbortSignal.any([timeout, this.signal]) : timeout
     });
-    if (!response.ok) throw new HttpError(response.status, `${route} answered HTTP ${response.status}`);
+    if (!response.ok) {
+      const answer = await response.json().catch(() => void 0);
+      const code3 = isRecord6(answer) && isRecord6(answer.error) && typeof answer.error.code === "string" ? answer.error.code.slice(0, 64) : void 0;
+      throw new HttpError(response.status, `${route} answered HTTP ${response.status}${code3 ? ` (${code3})` : ""}`, code3);
+    }
     return response.json();
   }
-  async readThread(threadId) {
-    return toThread(await this.#post("/v1/thread/read", { threadId }));
+  /** A conversation's title, state, agent and working folder; on its remote host when `hostId` names one. */
+  async readThread(threadId, hostId) {
+    return toThread(await this.#post("/v1/thread/read", { threadId, ...onHost(hostId) }));
   }
-  /** One page of all Threads across workspaces, most recently updated first. */
+  /**
+   * One page of all Threads across workspaces, most recently updated first: this machine's, or with
+   * `hostId` a remote host's (each entry then names that host).
+   */
   async listThreads(options = {}) {
     const raw = await this.#post("/v1/thread/list", {
       limit: options.limit ?? 100,
       sort: "updated-desc",
-      ...options.cursor ? { cursor: options.cursor } : {}
+      ...options.cursor ? { cursor: options.cursor } : {},
+      ...onHost(options.hostId)
     });
     if (!isRecord6(raw) || !Array.isArray(raw.threads)) return { threads: [], nextCursor: null };
     const threads = raw.threads.flatMap((thread2) => {
-      if (!isRecord6(thread2) || typeof thread2.threadId !== "string" || typeof thread2.updatedAt !== "string") return [];
+      if (!isRecord6(thread2) || !isThreadId(thread2.threadId) || typeof thread2.updatedAt !== "string") return [];
       return [
         {
           threadId: thread2.threadId,
@@ -2095,15 +2154,16 @@ var ExternalApi = class {
           ...typeof thread2.title === "string" && thread2.title.trim() ? { title: thread2.title.trim() } : {},
           ...typeof thread2.cwd === "string" && thread2.cwd ? { cwd: thread2.cwd } : {},
           ...typeof thread2.status === "string" ? { status: normalizeStatus(thread2.status) } : {},
-          ...typeof thread2.harnessId === "string" ? { harnessId: thread2.harnessId } : {}
+          ...typeof thread2.harnessId === "string" ? { harnessId: thread2.harnessId } : {},
+          ...onHost(typeof thread2.hostId === "string" ? thread2.hostId : void 0)
         }
       ];
     });
     return { threads, nextCursor: typeof raw.nextCursor === "string" ? raw.nextCursor : null };
   }
-  /** Turns with the user's messages and the final agent reply; the latest 10 without a range. */
-  async readTurns(threadId, range) {
-    const raw = await this.#post("/v1/thread/read", { threadId, view: "messages", ...range ?? {} });
+  /** Turns with the user's messages and the final agent reply; the latest 10 without a range. On its remote host when `hostId` names one. */
+  async readTurns(threadId, range, hostId) {
+    const raw = await this.#post("/v1/thread/read", { threadId, view: "messages", ...range ?? {}, ...onHost(hostId) });
     if (!isRecord6(raw)) return { totalTurns: 0, turns: [] };
     const turns = Array.isArray(raw.turns) ? raw.turns.flatMap((turn) => {
       if (!isRecord6(turn) || typeof turn.turnNumber !== "number") return [];
@@ -2114,8 +2174,21 @@ var ExternalApi = class {
     }) : [];
     return { totalTurns: typeof raw.totalTurns === "number" ? raw.totalTurns : 0, turns };
   }
-  async threadCwd(threadId) {
-    return (await this.readThread(threadId))?.cwd;
+  async threadCwd(threadId, hostId) {
+    return (await this.readThread(threadId, hostId))?.cwd;
+  }
+  /**
+   * The computers paired with codexhost Web (`/v1/host/list`): their ids, names and whether they
+   * are connected. Nothing else codexhost says about them (projects, folders) is read.
+   */
+  async listHosts() {
+    const raw = await this.#post("/v1/host/list", {});
+    if (!isRecord6(raw) || !Array.isArray(raw.hosts)) return [];
+    return raw.hosts.flatMap((host) => {
+      if (!isRecord6(host) || !isRemoteHostId(host.hostId)) return [];
+      const name = typeof host.displayName === "string" ? Array.from(host.displayName.trim()).slice(0, 120).join("") : "";
+      return [{ hostId: host.hostId, ...name ? { name } : {}, online: host.online === true, state: hostState(host.state) }];
+    });
   }
   /**
    * Starts a delegated child conversation (`codexhost delegate start`); needs a dispatching client.
@@ -2135,8 +2208,9 @@ var ExternalApi = class {
     if (!isRecord6(raw) || typeof raw.threadId !== "string") throw new Error("codexhost did not return the new conversation");
     return { threadId: raw.threadId };
   }
-  async listChildren(parentThreadId) {
-    const raw = await this.#post("/v1/thread/list", { parentThreadId, limit: 100 });
+  /** A conversation's delegated children; on its remote host when `hostId` names one (they are there too). */
+  async listChildren(parentThreadId, hostId) {
+    const raw = await this.#post("/v1/thread/list", { parentThreadId, limit: 100, ...onHost(hostId) });
     if (!isRecord6(raw) || !Array.isArray(raw.threads)) return [];
     return raw.threads.flatMap((thread2) => toThread(thread2) ?? []);
   }
@@ -2146,16 +2220,18 @@ var ExternalApi = class {
 var CHUNK = 20;
 var LOOK_BACK = 60;
 var FavoritesService = class {
-  constructor(paths, api, log, now = Date.now) {
+  constructor(paths, api, log, now = Date.now, hostOf = () => void 0) {
     this.paths = paths;
     this.api = api;
     this.log = log;
     this.now = now;
+    this.hostOf = hostOf;
   }
   paths;
   api;
   log;
   now;
+  hostOf;
   #cached = { signature: "", file: emptyFavorites() };
   #pending = /* @__PURE__ */ new Set();
   /** Changes whenever the file is replaced. */
@@ -2191,14 +2267,15 @@ var FavoritesService = class {
     this.#pending.add(tracked);
     void tracked.finally(() => this.#pending.delete(tracked));
   }
-  /** Looks through the latest turns, then further back, and notes the turn and speaker found. */
+  /** Looks through the latest turns, then further back, and notes the turn and speaker found. On its remote host for a conversation on another computer. */
   async #locate(favorite) {
-    const latest = await this.api.readTurns(favorite.threadId);
+    const hostId = favorite.hostId ?? this.hostOf(favorite.threadId);
+    const latest = await this.api.readTurns(favorite.threadId, void 0, hostId);
     let found = locatePassage(favorite.text, latest.turns);
     const oldest = latest.turns.reduce((min, turn) => Math.min(min, turn.turnNumber), Number.POSITIVE_INFINITY);
     for (let to = oldest - 1; !found && Number.isFinite(to) && to >= 1 && oldest - to <= LOOK_BACK; to -= CHUNK) {
       const from = Math.max(1, to - CHUNK + 1);
-      found = locatePassage(favorite.text, (await this.api.readTurns(favorite.threadId, { from, to })).turns);
+      found = locatePassage(favorite.text, (await this.api.readTurns(favorite.threadId, { from, to }, hostId)).turns);
     }
     if (!found) return;
     const where = found;
@@ -3477,6 +3554,207 @@ function applyEdit(draft, params, ctx) {
   }
 }
 
+// src/backend/remote-hosts.ts
+var REMOTE_LIST_LIMIT = 50;
+var REMOTE_RETRY_FIRST_MS = 6e4;
+var REMOTE_RETRY_CAP_MS = 30 * 6e4;
+var INFO_FRESH_MS = 3e4;
+var THREADS_KEPT = 5e3;
+var HOSTS_KEPT = 32;
+var RemoteHosts = class {
+  #api;
+  #log;
+  #options;
+  #hosts = /* @__PURE__ */ new Map();
+  /** Thread id to host id, the most recently noted last. */
+  #threads = /* @__PURE__ */ new Map();
+  /** When codexhost was last asked about the hosts, whether it ever answered, and the request under way. */
+  #infoAt = Number.NEGATIVE_INFINITY;
+  #infoKnown = false;
+  #infoRunning;
+  #infoFailedLogged = false;
+  #version = 0;
+  #timer;
+  #round;
+  #started = false;
+  #stopped = false;
+  constructor(api, log, options) {
+    this.#api = api;
+    this.#log = log;
+    this.#options = options;
+  }
+  #now() {
+    return this.#options.now?.() ?? Date.now();
+  }
+  /** Goes up when what a card shows of a host (its name, its state) changed. */
+  get version() {
+    return this.#version;
+  }
+  /** Remembers that a conversation runs on a remote host. Anything that is no conversation id or no remote host id is ignored. Returns whether it is new. */
+  note(threadId, hostId) {
+    if (!isThreadId(threadId) || !isRemoteHostId(hostId)) return false;
+    this.#addHost(hostId);
+    const before = this.#threads.get(threadId);
+    this.#threads.delete(threadId);
+    this.#threads.set(threadId, hostId);
+    if (this.#threads.size > THREADS_KEPT) this.#threads.delete(this.#threads.keys().next().value);
+    return before !== hostId;
+  }
+  /** What the state, the link index and the saved passages say, when the backend starts. */
+  seed(pairs) {
+    for (const [threadId, hostId] of pairs) if (hostId !== void 0) this.note(threadId, hostId);
+  }
+  /** The remote host a conversation runs on; none for a local conversation (or one not known to be remote). */
+  hostOf(threadId) {
+    return this.#threads.get(threadId);
+  }
+  /** Every conversation known to be remote, with its host. */
+  entries() {
+    return this.#threads.entries();
+  }
+  /** The remote hosts known. */
+  hosts() {
+    return [...this.#hosts.keys()];
+  }
+  #addHost(hostId) {
+    let entry = this.#hosts.get(hostId);
+    if (!entry) {
+      entry = {};
+      this.#hosts.set(hostId, entry);
+      if (this.#hosts.size > HOSTS_KEPT) {
+        for (const [id, other] of this.#hosts) if (!other.info && id !== hostId && this.#hosts.size > HOSTS_KEPT) this.#hosts.delete(id);
+      }
+    }
+    return entry;
+  }
+  /**
+   * Whether a host cannot be reached now, so that nothing is sent its way: codexhost says it is not
+   * connected, or does not list it at all (no longer paired, or codexhost Web not running), or its
+   * last list failed and its next try is not due yet.
+   */
+  down(hostId) {
+    const entry = this.#hosts.get(hostId);
+    if (entry?.failure && this.#now() < entry.failure.retryAt) return true;
+    if (!entry?.info) return this.#infoKnown;
+    return !(entry.info.online && entry.info.state === "connected");
+  }
+  /** A read on that host failed as if it could not be reached: it waits like a failed list. */
+  failed(hostId, error) {
+    const entry = this.#hosts.get(hostId);
+    if (!entry || entry.failure && this.#now() < entry.failure.retryAt) return;
+    entry.failure = this.#nextTry(`read on remote host ${shortHost(hostId)}`, error, entry.failure);
+  }
+  /** What a card shows of a host: its name, as its owner set it in codexhost, and how it is doing. */
+  view(hostId) {
+    const info = this.#hosts.get(hostId)?.info;
+    return { id: hostId, ...info?.name ? { name: info.name } : {}, state: info ? info.state : "unknown" };
+  }
+  /** The latest list of every host that can be reached now, each entry naming its host. */
+  listed() {
+    const all = [];
+    for (const [hostId, entry] of this.#hosts) if (entry.listed && !this.down(hostId)) all.push(...entry.listed.threads);
+    return all;
+  }
+  /**
+   * Asks codexhost which hosts there are, once for every caller, unless it was asked within the last
+   * 30 seconds (`force`: whatever the time). Every host it lists becomes known.
+   */
+  refreshInfo(force = false) {
+    if (this.#infoRunning) return this.#infoRunning;
+    if (!force && this.#now() - this.#infoAt < INFO_FRESH_MS) return Promise.resolve();
+    this.#infoAt = this.#now();
+    this.#infoRunning = (async () => {
+      try {
+        const hosts = await this.#api.listHosts();
+        const seen = /* @__PURE__ */ new Set();
+        let changed = false;
+        for (const host of hosts) {
+          seen.add(host.hostId);
+          const entry = this.#addHost(host.hostId);
+          const info = { ...host.name ? { name: host.name } : {}, online: host.online, state: hostState(host.state) };
+          if (entry.info?.name !== info.name || entry.info?.online !== info.online || entry.info?.state !== info.state) changed = true;
+          entry.info = info;
+        }
+        for (const [hostId, entry] of this.#hosts)
+          if (!seen.has(hostId) && entry.info) {
+            delete entry.info;
+            changed = true;
+          }
+        if (changed || !this.#infoKnown) this.#version += 1;
+        this.#infoKnown = true;
+        this.#infoFailedLogged = false;
+      } catch (error) {
+        if (!this.#infoFailedLogged) this.#log.error("ask codexhost for its remote hosts", error);
+        this.#infoFailedLogged = true;
+      } finally {
+        this.#infoRunning = void 0;
+      }
+    })();
+    return this.#infoRunning;
+  }
+  /** Whether codexhost has said which hosts there are at least once: a card's view waits for it only until then. */
+  get infoKnown() {
+    return this.#infoKnown;
+  }
+  /** One round: which hosts there are, then the list of every one that can be reached, side by side. */
+  tick() {
+    if (this.#round) return this.#round;
+    this.#round = (async () => {
+      try {
+        await this.refreshInfo(true);
+        await Promise.allSettled(this.hosts().filter((hostId) => !this.down(hostId)).map((hostId) => this.#list(hostId)));
+      } finally {
+        this.#round = void 0;
+      }
+    })();
+    return this.#round;
+  }
+  async #list(hostId) {
+    const entry = this.#addHost(hostId);
+    try {
+      const { threads } = await this.#api.listThreads({ hostId, limit: REMOTE_LIST_LIMIT });
+      const listed = threads.filter((thread2) => isThreadId(thread2.threadId)).map((thread2) => ({ ...thread2, hostId }));
+      for (const thread2 of listed) this.note(thread2.threadId, hostId);
+      entry.listed = { threads: listed, at: this.#now() };
+      if (entry.failure) this.#log.info(`listing remote host ${shortHost(hostId)} works again`);
+      delete entry.failure;
+      this.#options.onListed?.(hostId, listed);
+    } catch (error) {
+      if (this.#stopped) return;
+      entry.failure = this.#nextTry(`list remote host ${shortHost(hostId)}`, error, entry.failure);
+    }
+  }
+  /** The next wait after a failure: a minute, then twice as long each time up to the cap; logged once per step until it is reached. */
+  #nextTry(what, error, previous) {
+    const step = (previous?.step ?? 0) + 1;
+    const wait = Math.min(REMOTE_RETRY_CAP_MS, REMOTE_RETRY_FIRST_MS * 2 ** (step - 1));
+    const capped = previous !== void 0 && Math.min(REMOTE_RETRY_CAP_MS, REMOTE_RETRY_FIRST_MS * 2 ** (previous.step - 1)) >= REMOTE_RETRY_CAP_MS;
+    const why = error instanceof HttpError ? `HTTP ${error.status}${error.code ? ` ${error.code}` : ""}` : error instanceof Error ? error.name : "failed";
+    if (!capped) this.#log.info(`${what} failed (${why}); next try in ${Math.round(wait / 6e4)} min`);
+    return { step, retryAt: this.#now() + wait };
+  }
+  /** Starts the rounds: the first after `delay`, then every `everyMs()`. */
+  start(delay) {
+    this.#started = true;
+    this.#stopped = false;
+    this.#schedule(delay);
+  }
+  #schedule(delay) {
+    clearTimeout(this.#timer);
+    if (!this.#started || this.#stopped) return;
+    this.#timer = setTimeout(() => {
+      void this.tick().finally(() => this.#schedule(this.#options.everyMs()));
+    }, delay);
+    this.#timer.unref?.();
+  }
+  /** Stops the rounds; resolves once the round under way (cut off by the backend stopping) is over. */
+  stop() {
+    this.#stopped = true;
+    clearTimeout(this.#timer);
+    return Promise.allSettled([this.#round, this.#infoRunning]).then(() => void 0);
+  }
+};
+
 // src/backend/scanner.ts
 var LIST_PAGE = 100;
 var RECENT_PAGE = 50;
@@ -3510,6 +3788,8 @@ var Scanner = class {
   #crawling = false;
   /** When this process last listed every conversation; every start does one pass. */
   #fullPassAt = 0;
+  /** Hosts already paged in full since the latest full pass on this machine. */
+  #listedHosts = /* @__PURE__ */ new Set();
   #lastRecentAt = 0;
   #timer;
   #started = false;
@@ -3552,15 +3832,20 @@ var Scanner = class {
     try {
       if (this.#held.size && (!this.#queue.length || this.#held.size >= HOLD_MAX || this.#now() - this.#heldSince >= HOLD_MS)) await this.#write();
       const thread2 = this.#queue.shift();
-      if (thread2) {
+      if (thread2?.hostId && this.options.remote?.down(thread2.hostId)) {
+        this.#queued.delete(thread2.threadId);
+      } else if (thread2) {
         this.#queued.delete(thread2.threadId);
         try {
           await this.#scan(thread2);
         } catch (error) {
-          const refused = error instanceof HttpError && error.status >= 400 && error.status < 500;
+          const remoteDown = thread2.hostId !== void 0 && (!(error instanceof HttpError) || error.status >= 500 || error.code === "RUNTIME_UNREACHABLE");
+          if (remoteDown) this.options.remote?.failed?.(thread2.hostId, error);
+          const refused = !remoteDown && error instanceof HttpError && error.status >= 400 && error.status < 500;
+          const where = thread2.hostId ? ` on remote host ${shortHost(thread2.hostId)}` : "";
           if (thread2.attempts + 1 < ATTEMPTS) this.#push({ ...thread2, attempts: thread2.attempts + 1 });
           else if (refused) await this.#markUnreadable(thread2);
-          else this.log.error(`skip conversation ${thread2.threadId.slice(0, 8)} after ${ATTEMPTS} attempts`, error);
+          else this.log.error(`skip conversation ${thread2.threadId.slice(0, 8)}${where} after ${ATTEMPTS} attempts`, error);
           delay = Math.max(delay, refused ? 500 : 2e3);
         }
       } else if (this.#crawling) {
@@ -3626,6 +3911,8 @@ var Scanner = class {
     } while (cursor);
     const all = [...byId.values()];
     this.#enqueue(all, index);
+    this.#listedHosts.clear();
+    await this.#discoverHosts(index);
     const now = this.#now();
     this.#fullPassAt = now;
     this.#crawling = true;
@@ -3655,10 +3942,38 @@ var Scanner = class {
     if (pruned) this.log.info(`forgot ${pruned} conversations codexhost no longer lists`);
     if (doubted !== void 0) this.log.info(`kept every conversation: codexhost listed ${all.length}, the last full listing ${doubted}`);
   }
+  /** Every conversation of one remote host, each entry naming it. */
+  async #listHost(hostId) {
+    const byId = /* @__PURE__ */ new Map();
+    let cursor;
+    do {
+      await sleep2(this.#pause());
+      const page = await this.api.listThreads({ limit: LIST_PAGE, hostId, ...cursor ? { cursor } : {} });
+      for (const thread2 of page.threads) if (!byId.has(thread2.threadId)) byId.set(thread2.threadId, { ...thread2, hostId });
+      cursor = page.nextCursor ?? void 0;
+    } while (cursor && !this.#stopped);
+    return [...byId.values()];
+  }
+  /** A host may be paired or reconnect after the local pass. Page it in full on the next round. */
+  async #discoverHosts(index) {
+    const remote = this.options.remote;
+    if (!remote) return;
+    for (const hostId of remote.hosts()) {
+      if (this.#stopped || this.#listedHosts.has(hostId) || remote.down(hostId)) continue;
+      try {
+        this.#enqueue(await this.#listHost(hostId), index);
+        this.#listedHosts.add(hostId);
+      } catch (error) {
+        remote.failed?.(hostId, error);
+      }
+    }
+  }
   async #listRecent(index) {
     this.#lastRecentAt = this.#now();
     const page = await this.api.listThreads({ limit: RECENT_PAGE });
     this.#enqueue(page.threads, index);
+    this.#enqueue(this.options.remote?.listed() ?? [], index);
+    await this.#discoverHosts(index);
   }
   /** Remembers a conversation codexhost cannot read, until it changes. */
   async #markUnreadable(thread2) {
@@ -3669,21 +3984,23 @@ var Scanner = class {
         updatedAt: thread2.updatedAt,
         scannedAt: now,
         unreadable: true,
-        ...thread2.title ? { title: thread2.title } : {}
+        ...thread2.title ? { title: thread2.title } : {},
+        ...thread2.hostId ? { hostId: thread2.hostId } : {}
       };
     });
   }
   async #scan(thread2) {
     const known = this.#known(await readIndex(this.paths), thread2.threadId);
     const from = (known?.turns ?? 0) + 1;
-    const latest = await this.api.readTurns(thread2.threadId);
+    const hostId = thread2.hostId;
+    const latest = await this.api.readTurns(thread2.threadId, void 0, hostId);
     const total = latest.totalTurns;
     const turns = new Map(latest.turns.map((turn) => [turn.turnNumber, turn]));
     const lowest = latest.turns.reduce((min, turn) => Math.min(min, turn.turnNumber), total + 1);
     for (let start = from; start < lowest; start += CHUNK2) {
       await sleep2(this.#pause());
       const end = Math.min(start + CHUNK2 - 1, lowest - 1);
-      for (const turn of (await this.api.readTurns(thread2.threadId, { from: start, to: end })).turns) turns.set(turn.turnNumber, turn);
+      for (const turn of (await this.api.readTurns(thread2.threadId, { from: start, to: end }, hostId)).turns) turns.set(turn.turnNumber, turn);
     }
     const scanned = unfinished(turns.get(total)) ? total - 1 : total;
     const now = this.#now();
@@ -3709,7 +4026,8 @@ var Scanner = class {
       ...thread2.title ? { title: thread2.title } : {},
       ...cwd ? { cwd } : {},
       ...keptFirst ? { firstPrompt: keptFirst } : {},
-      ...harnessId ? { harnessId } : {}
+      ...harnessId ? { harnessId } : {},
+      ...hostId ? { hostId } : {}
     };
     let quiet = false;
     const held = [...this.#held];
@@ -4300,6 +4618,7 @@ var AGAIN_AFTER_MS = 10 * 6e4;
 var DAILY_LIMIT = 200;
 var POLL_MS = 6e4;
 var WORKERS = 2;
+var REMOTE_WORKERS = 1;
 var RETRY_FIRST_MS = 30 * 6e4;
 var RETRY_CAP_MS = 8 * 60 * 6e4;
 var FAILURES_KEPT = 5e3;
@@ -4335,6 +4654,8 @@ var Summarizer = class {
   #queue = [];
   /** Conversations being summarized now, and why. */
   #running = /* @__PURE__ */ new Map();
+  /** Those of them on other computers. */
+  #runningRemote = /* @__PURE__ */ new Set();
   #failures = /* @__PURE__ */ new Map();
   /** What the backfill under way has tried, on disk. */
   #tried;
@@ -4412,6 +4733,7 @@ var Summarizer = class {
       if (PRIORITY[job.reason] < PRIORITY[waiting.reason]) waiting.reason = job.reason;
       if (job.updatedAt) waiting.updatedAt = job.updatedAt;
       if (job.requestedAt !== void 0) waiting.requestedAt = job.requestedAt;
+      if (job.hostId) waiting.hostId = job.hostId;
     } else this.#queue.push(job);
     this.#queue.sort((a, b) => PRIORITY[a.reason] - PRIORITY[b.reason]);
     this.#work();
@@ -4423,7 +4745,8 @@ var Summarizer = class {
    */
   async request(threadId) {
     const settings = await this.#deps.settings();
-    const thread2 = await within(this.#deps.api.readThread(threadId), READ_WAIT_MS).catch(() => void 0);
+    const hostId = this.#deps.remote?.hostOf(threadId);
+    const thread2 = hostId && this.#deps.remote?.down(hostId) ? void 0 : await within(this.#deps.api.readThread(threadId, hostId), READ_WAIT_MS).catch(() => void 0);
     if (thread2) {
       this.#noteAgent(threadId, thread2.harnessId);
       if (!summaryEngineFor(settings, thread2.harnessId)) throw noSummarizer(thread2.harnessId);
@@ -4432,7 +4755,7 @@ var Summarizer = class {
     if (!has(state, threadId) && !hasRoomForMainline(state)) throw stateFull();
     if (isExcluded(state, threadId)) await updateState(this.#deps.paths, (draft) => includeInSummaries(draft, threadId));
     this.#failures.delete(threadId);
-    this.enqueue({ threadId, reason: "manual" });
+    this.enqueue({ threadId, reason: "manual", ...hostId ? { hostId } : {} });
   }
   /** Summarizes every conversation codexhost has, once; carries on after restarts until done or stopped. */
   async startBackfill() {
@@ -4510,8 +4833,10 @@ var Summarizer = class {
     try {
       listed = (await within(this.#deps.api.listThreads({ limit: 30 }), LIST_WAIT_MS)).threads;
     } catch {
-      return;
+      listed = [];
     }
+    listed = [...listed, ...this.#deps.remote?.listed() ?? []];
+    if (!listed.length) return;
     const room = hasRoomForMainline(state);
     for (const thread2 of listed) {
       if (thread2.harnessId) this.#noteAgent(thread2.threadId, thread2.harnessId);
@@ -4528,7 +4853,7 @@ var Summarizer = class {
         this.#noteFull();
         continue;
       }
-      this.enqueue({ threadId: thread2.threadId, reason: "auto", updatedAt: thread2.updatedAt });
+      this.enqueue({ threadId: thread2.threadId, reason: "auto", updatedAt: thread2.updatedAt, ...thread2.hostId ? { hostId: thread2.hostId } : {} });
     }
   }
   /**
@@ -4543,6 +4868,7 @@ var Summarizer = class {
     const candidates2 = [];
     for (const [threadId, record] of Object.entries(index.threads)) {
       if (record.unreadable || record.turns <= 0 || isExcluded(state, threadId)) continue;
+      if (record.hostId && this.#deps.remote?.down(record.hostId)) continue;
       plan.total += 1;
       const conversation = state.conversations[threadId];
       const summary = conversation?.summary;
@@ -4551,7 +4877,7 @@ var Summarizer = class {
       else if (!this.#mayRoute(threadId, settings, record.harnessId)) plan.skipped += 1;
       else if (this.#running.has(threadId)) continue;
       else if (tried.has(threadId) || !this.#retryDue(threadId, record.updatedAt)) plan.failed += 1;
-      else candidates2.push({ threadId, updatedAt: record.updatedAt, kept: conversation !== void 0 });
+      else candidates2.push({ threadId, updatedAt: record.updatedAt, kept: conversation !== void 0, ...record.hostId ? { hostId: record.hostId } : {} });
     }
     candidates2.sort((a, b) => (ms(b.updatedAt) ?? 0) - (ms(a.updatedAt) ?? 0));
     let room = this.#room(state);
@@ -4562,7 +4888,8 @@ var Summarizer = class {
         continue;
       }
       if (!candidate.kept) room -= 1;
-      plan.pending.push([candidate.threadId, candidate.updatedAt]);
+      const { kept: _kept, ...pending } = candidate;
+      plan.pending.push(pending);
     }
     return plan;
   }
@@ -4648,9 +4975,10 @@ var Summarizer = class {
       }
       return;
     }
-    pending.sort(([, a], [, b]) => (ms(b) ?? 0) - (ms(a) ?? 0));
+    pending.sort((a, b) => (ms(b.updatedAt) ?? 0) - (ms(a.updatedAt) ?? 0));
     const room = WORKERS * 3 - this.#queue.length;
-    for (const [threadId, updatedAt] of pending.slice(0, Math.max(0, room))) this.enqueue({ threadId, reason: "backfill", updatedAt, requestedAt });
+    for (const { threadId, updatedAt, hostId } of pending.slice(0, Math.max(0, room)))
+      this.enqueue({ threadId, reason: "backfill", updatedAt, requestedAt, ...hostId ? { hostId } : {} });
   }
   /** Takes the jobs waiting for this reason out of the line. Returns how many. */
   #drop(reason) {
@@ -4675,11 +5003,18 @@ var Summarizer = class {
     const agent = this.#agents.get(threadId) ?? listed;
     return agent === void 0 || summaryEngineFor(settings, agent || void 0) !== void 0;
   }
+  /** The remote host a job's conversation runs on, when it is on another computer. */
+  #hostOf(job) {
+    return job.hostId ?? this.#deps.remote?.hostOf(job.threadId);
+  }
   #work() {
     while (!this.#stopped && this.#running.size < WORKERS && this.#queue.length) {
-      const job = this.#queue.shift();
+      const next = this.#runningRemote.size >= REMOTE_WORKERS ? this.#queue.findIndex((item) => !this.#hostOf(item)) : 0;
+      if (next < 0) break;
+      const job = this.#queue.splice(next, 1)[0];
       if (job.reason === "auto" && (!this.#autoOn || autoCalls(dayOf(this.#counts, this.#now())) >= DAILY_LIMIT)) continue;
       this.#running.set(job.threadId, job.reason);
+      if (this.#hostOf(job)) this.#runningRemote.add(job.threadId);
       void this.#summarize(job).catch((error) => {
         if (this.#stopped) return;
         this.#noteFailure(job, error instanceof MainlineError && error.code === "STATE_FULL");
@@ -4689,6 +5024,7 @@ var Summarizer = class {
         if (!(typeof error === "object" && error !== null && this.#logged.has(error))) this.#deps.log.error(`summarize ${job.threadId.slice(0, 8)}`, error);
       }).finally(() => {
         this.#running.delete(job.threadId);
+        this.#runningRemote.delete(job.threadId);
         if (job.reason === "backfill" && this.#backfill) void this.tick();
         this.#work();
       });
@@ -4706,7 +5042,9 @@ var Summarizer = class {
       if (job.reason === "auto") this.#noteFull();
       return;
     }
-    const thread2 = await api.readThread(job.threadId);
+    const hostId = this.#hostOf(job);
+    if (hostId && this.#deps.remote?.down(hostId)) throw new Error(`the computer this conversation runs on (remote host ${shortHost(hostId)}) is not connected now`);
+    const thread2 = await api.readThread(job.threadId, hostId);
     if (!thread2) throw new Error("codexhost could not read this conversation");
     this.#noteAgent(job.threadId, thread2.harnessId);
     const engine = summaryEngineFor(settings, thread2.harnessId);
@@ -4715,13 +5053,13 @@ var Summarizer = class {
       return;
     }
     if (thread2.status === "running" && job.reason === "auto") return;
-    const latest = await api.readTurns(job.threadId);
+    const latest = await api.readTurns(job.threadId, void 0, hostId);
     let turns = latest.turns;
     if (latest.totalTurns > turns.length) {
       turns = [];
       for (let to = latest.totalTurns; to >= 1 && turns.length < TURNS_READ; to -= TURNS_PER_READ) {
         const from = Math.max(1, to - TURNS_PER_READ + 1, latest.totalTurns - TURNS_READ + 1);
-        turns.push(...(await api.readTurns(job.threadId, { from, to })).turns);
+        turns.push(...(await api.readTurns(job.threadId, { from, to }, hostId)).turns);
         if (from <= Math.max(1, latest.totalTurns - TURNS_READ + 1)) break;
       }
     }
@@ -4743,6 +5081,10 @@ var Summarizer = class {
     });
     if (this.#stopped) return;
     const latestState = await this.#deps.state();
+    if (job.reason === "auto") {
+      const previous = latestState.conversations[job.threadId]?.summary;
+      if (previous && (job.updatedAt !== void 0 && previous.threadUpdatedAt === job.updatedAt || this.#now() - previous.at < AGAIN_AFTER_MS)) return;
+    }
     if (!this.#roomFor(latestState, job)) {
       if (job.reason === "manual") throw stateFull();
       return;
@@ -4766,6 +5108,7 @@ var Summarizer = class {
         { at: ctx.now, model, ...updatedAt ? { threadUpdatedAt: updatedAt } : {}, turns: latest.totalTurns },
         { ...ctx, ...activityAt !== void 0 ? { activityAt } : {} }
       );
+      if (hostId) noteHosts(draft, [[job.threadId, hostId]]);
     });
     this.#failures.delete(job.threadId);
     this.#lastError = void 0;
@@ -4792,7 +5135,9 @@ var Summarizer = class {
    */
   async #call(engine, job, prompt, countedAt) {
     const started = Date.now();
-    const line = (outcome) => `model call: ${engine} ${job.reason} ${job.threadId.slice(0, 8)} ${((Date.now() - started) / 1e3).toFixed(1)}s ${outcome}`;
+    const hostId = this.#hostOf(job);
+    const where = hostId ? ` (remote host ${shortHost(hostId)})` : "";
+    const line = (outcome) => `model call: ${engine} ${job.reason} ${job.threadId.slice(0, 8)}${where} ${((Date.now() - started) / 1e3).toFixed(1)}s ${outcome}`;
     try {
       const answer = await this.#deps.runModel(engine, { system: SUMMARY_SYSTEM, prompt, schema: SUMMARY_SCHEMA });
       const summary = readSummary(answer.value);
@@ -4822,12 +5167,16 @@ var RETRY_CAP_MS2 = 15 * 6e4;
 var REFUSED_FIRST_MS = 10 * 6e4;
 var REFUSED_CAP_MS = 60 * 6e4;
 var READS_AT_ONCE = 2;
+var REMOTE_READS_AT_ONCE = 1;
 var live = (status) => status === "running" || status === "waiting";
+var unreachable = (error) => !(error instanceof HttpError) || error.status >= 500 || error.code === "RUNTIME_UNREACHABLE";
 var ThreadInfoService = class {
-  constructor(api, log, now = Date.now) {
+  constructor(api, log, now = Date.now, options = {}) {
     this.api = api;
     this.log = log;
     this.now = now;
+    this.#hosts = options.hosts;
+    this.#remoteApi = options.remoteApi ?? api;
   }
   api;
   log;
@@ -4847,13 +5196,25 @@ var ThreadInfoService = class {
   #listAskedAt = Number.NEGATIVE_INFINITY;
   #listing;
   #listFailure;
+  /** What each remote host's last list named (with its state), and when it came. */
+  #remoteListed = /* @__PURE__ */ new Map();
   /** When each Thread was last read on its own. */
   #readAt = /* @__PURE__ */ new Map();
   #failures = /* @__PURE__ */ new Map();
   /** Queued or being read, with what resolves when its read is over. */
   #pending = /* @__PURE__ */ new Map();
+  /** This machine's reads, and those of conversations on other computers, each queue with its own count. */
   #queue = [];
+  #remoteQueue = [];
   #reading = 0;
+  #remoteReading = 0;
+  #hosts;
+  #remoteApi;
+  /** The remote host a conversation runs on, and whether it can be reached; none for a local conversation. */
+  #hostOf(threadId) {
+    const hostId = this.#hosts?.hostOf(threadId);
+    return hostId ? { hostId, down: this.#hosts.down(hostId) } : void 0;
+  }
   get version() {
     return this.#version;
   }
@@ -4873,22 +5234,44 @@ var ThreadInfoService = class {
   }
   /** Asks codexhost for a conversation's delegated children, at most once a minute per parent. */
   async lookupChildren(parentId) {
-    if (!this.api || this.desktopFresh()) return false;
+    if (!this.api) return false;
+    const host = this.#hostOf(parentId);
+    if (host ? host.down : this.desktopFresh()) return false;
     const last = this.#childLookups.get(parentId) ?? 0;
     if (this.now() - last < 6e4) return false;
     this.#childLookups.set(parentId, this.now());
     let changed = false;
     try {
-      for (const child of await this.api.listChildren(parentId)) {
+      const children = host ? await this.#remoteApi.listChildren(parentId, host.hostId) : await this.api.listChildren(parentId);
+      for (const child of children) {
         if (child.threadId === parentId) continue;
+        if (host) this.#hosts?.note?.(child.threadId, host.hostId);
         if (this.#apiParents.get(child.threadId) !== parentId) changed = true;
         this.#apiParents.set(child.threadId, parentId);
         this.#set(child.threadId, child, "list");
       }
     } catch (error) {
-      this.log.error(`list children of ${parentId.slice(0, 8)}`, error);
+      if (host && unreachable(error)) this.#hosts?.failed?.(host.hostId, error);
+      this.log.error(`list children of ${parentId.slice(0, 8)}${host ? ` on remote host ${shortHost(host.hostId)}` : ""}`, error);
     }
     return changed;
+  }
+  /**
+   * Takes a remote host's list (RemoteHosts lists each host now and then): titles, agents and
+   * states, which count like those of this machine's list.
+   */
+  noteListed(hostId, threads) {
+    for (const thread2 of threads)
+      this.#set(
+        thread2.threadId,
+        {
+          status: thread2.status ?? this.#facts.get(thread2.threadId)?.status ?? "unknown",
+          ...thread2.title ? { title: thread2.title } : {},
+          ...thread2.harnessId ? { harnessId: thread2.harnessId } : {}
+        },
+        "list"
+      );
+    this.#remoteListed.set(hostId, { ids: new Set(threads.filter((thread2) => thread2.status).map((thread2) => thread2.threadId)), at: this.now() });
   }
   /** All facts known so far, for building views. */
   all() {
@@ -4966,7 +5349,10 @@ var ThreadInfoService = class {
     if (failure2 && now < failure2.retryAt) return false;
     const fact = this.#facts.get(threadId);
     if (fact?.source === "desktop" && this.desktopFresh()) return false;
-    const listed = this.#listed.has(threadId) && now - this.#listedAt <= LIST_TRUSTED_MS;
+    const host = this.#hostOf(threadId);
+    if (host?.down) return false;
+    const remote = host ? this.#remoteListed.get(host.hostId) : void 0;
+    const listed = host ? Boolean(remote?.ids.has(threadId) && now - remote.at <= LIST_TRUSTED_MS) : this.#listed.has(threadId) && now - this.#listedAt <= LIST_TRUSTED_MS;
     if (listed && !live(fact?.status)) return false;
     const maxAge = focused ? FOCUS_MAX_AGE_MS : live(fact?.status) ? RUNNING_MAX_AGE_MS : OTHER_MAX_AGE_MS;
     return now - (this.#readAt.get(threadId) ?? Number.NEGATIVE_INFINITY) > maxAge;
@@ -5007,32 +5393,49 @@ var ThreadInfoService = class {
   #enqueue(threadId) {
     const pending = this.#pending.get(threadId);
     if (pending) return pending;
-    const read = new Promise((done) => this.#queue.push({ threadId, done }));
+    const hostId = this.#hosts?.hostOf(threadId);
+    const queue = hostId ? this.#remoteQueue : this.#queue;
+    const read = new Promise((done) => queue.push({ threadId, ...hostId ? { hostId } : {}, done }));
     this.#pending.set(threadId, read);
     this.#pump();
     return read;
   }
   #pump() {
+    const settle = (job) => {
+      this.#pending.delete(job.threadId);
+      job.done();
+      this.#pump();
+    };
     while (this.#reading < READS_AT_ONCE && this.#queue.length) {
       const job = this.#queue.shift();
       this.#reading += 1;
       void this.#read(job.threadId).finally(() => {
         this.#reading -= 1;
-        this.#pending.delete(job.threadId);
-        job.done();
-        this.#pump();
+        settle(job);
+      });
+    }
+    while (this.#remoteReading < REMOTE_READS_AT_ONCE && this.#remoteQueue.length) {
+      const job = this.#remoteQueue.shift();
+      this.#remoteReading += 1;
+      void this.#read(job.threadId, job.hostId).finally(() => {
+        this.#remoteReading -= 1;
+        settle(job);
       });
     }
   }
-  async #read(threadId) {
+  async #read(threadId, hostId) {
+    if (hostId && this.#hosts?.down(hostId)) return;
     try {
-      const thread2 = await this.api.readThread(threadId);
+      const thread2 = hostId ? await this.#remoteApi.readThread(threadId, hostId) : await this.api.readThread(threadId);
       this.#readAt.set(threadId, this.now());
       this.#failures.delete(threadId);
       if (thread2) this.#set(threadId, thread2, "read");
     } catch (error) {
-      const refused = error instanceof HttpError && error.status >= 400 && error.status < 500;
-      this.#failures.set(threadId, this.#failed(`read Thread ${threadId.slice(0, 8)}`, error, this.#failures.get(threadId), refused));
+      const remoteDown = hostId !== void 0 && unreachable(error);
+      if (remoteDown) this.#hosts?.failed?.(hostId, error);
+      const refused = !remoteDown && error instanceof HttpError && error.status >= 400 && error.status < 500;
+      const where = hostId ? ` on remote host ${shortHost(hostId)}` : "";
+      this.#failures.set(threadId, this.#failed(`read Thread ${threadId.slice(0, 8)}${where}`, error, this.#failures.get(threadId), refused));
     }
   }
   /**
@@ -5324,6 +5727,10 @@ var SETTINGS_TTL_MS = 3e3;
 var RECENTLY_USED_MS = 10 * 6e4;
 var GITHUB_EVERY_MS = 6e4;
 var IDLE_EVERY_MS = 10 * 6e4;
+var REMOTE_EVERY_MS = 6e4;
+var REMOTE_FIRST_MS = 1e4;
+var HOST_INFO_WAIT_MS = 1500;
+var REPORTED_HOSTS = 500;
 var CLIENT_ID = /^[A-Za-z0-9-]{8,64}$/u;
 var FOCUS_LIMIT = 64;
 var ALERTS_SHOWN = 50;
@@ -5335,7 +5742,7 @@ var OLD_FOLDER_EVERY_MS = 3e4;
 function homeAsTilde(file, home = os4.homedir()) {
   return home && (file === home || file.startsWith(`${home}${path17.sep}`)) ? `~${file.slice(home.length)}` : file;
 }
-var VERSION2 = true ? "0.10.3" : "dev";
+var VERSION2 = true ? "0.10.4" : "dev";
 var isRecord18 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var own3 = (record, key) => Object.hasOwn(record, key) ? record[key] : void 0;
 var contentKey = (value) => createHash("sha1").update(JSON.stringify(value)).digest("base64url").slice(0, 16);
@@ -5367,7 +5774,11 @@ function parseTree(params) {
   }
   const parents = {};
   for (const [child, parent] of Object.entries(params.parents)) if (isThreadId(child) && isThreadId(parent)) parents[child] = parent;
-  return { nodes: nodes2, parents };
+  const hosts = {};
+  if (isRecord18(params.hosts)) {
+    for (const [threadId, hostId] of Object.entries(params.hosts).slice(0, REPORTED_HOSTS)) if (isThreadId(threadId) && isRemoteHostId(hostId)) hosts[threadId] = hostId;
+  }
+  return { nodes: nodes2, parents, ...Object.keys(hosts).length ? { hosts } : {} };
 }
 var LIVE_WINDOW_MS = 2 * 24 * 60 * 60 * 1e3;
 var LIVE_LIMIT = 30;
@@ -5425,11 +5836,19 @@ async function activate(ctx, options = {}) {
   const credentials = path17.join(dataRoot, "cli-credentials.json");
   const api = new ExternalApi(credentials, 3e3, fetch, stopping.signal);
   const slowApi = new ExternalApi(credentials, 2e4, fetch, stopping.signal);
-  const threads = new ThreadInfoService(api, log);
-  const integrations = new Integrations({ home: os4.homedir(), dataDir: ctx.dataDir, command });
-  const refs = refsPaths(ctx.dataDir);
+  const remoteApi = new ExternalApi(credentials, 8e3, fetch, stopping.signal);
   let lastUsedAt = Date.now();
   const recentlyUsed = () => Date.now() - lastUsedAt < RECENTLY_USED_MS;
+  const remote = new RemoteHosts(remoteApi, log, {
+    everyMs: () => recentlyUsed() ? REMOTE_EVERY_MS : IDLE_EVERY_MS,
+    onListed: (hostId, listed) => threads.noteListed(hostId, listed)
+  });
+  const threads = new ThreadInfoService(api, log, Date.now, {
+    hosts: { hostOf: (threadId) => hostOf(threadId), down: (hostId) => remote.down(hostId), note: (threadId, hostId) => noteHost(threadId, hostId), failed: (hostId, error) => remote.failed(hostId, error) },
+    remoteApi
+  });
+  const integrations = new Integrations({ home: os4.homedir(), dataDir: ctx.dataDir, command });
+  const refs = refsPaths(ctx.dataDir);
   const scanner = new Scanner(slowApi, refs, log, {
     recentEveryMs: () => recentlyUsed() ? 6e4 : IDLE_EVERY_MS,
     // A conversation with a mainline, a last request or a saved passage keeps its title and project
@@ -5438,10 +5857,11 @@ async function activate(ctx, options = {}) {
       const state = await currentState();
       const saved = await favorites.current();
       return [...Object.keys(state.conversations), ...Object.keys(state.prompts), ...saved.items.map((item) => item.threadId)];
-    }
+    },
+    remote: { hosts: () => remote.hosts(), down: (hostId) => remote.down(hostId), listed: () => remote.listed(), failed: (hostId, error) => remote.failed(hostId, error) }
   });
   const github = new GitHubWatcher(refs, log, untilAborted(options.runGh ?? createGhRunner(), stopping.signal), Date.now, stopping.signal);
-  const favorites = new FavoritesService(favoritesPaths(ctx.dataDir), slowApi, log);
+  const favorites = new FavoritesService(favoritesPaths(ctx.dataDir), slowApi, log, Date.now, (threadId) => hostOf(threadId));
   const uploads = new Uploads(ctx.dataDir);
   let reveal;
   const pendingReveal = () => reveal && Date.now() - reveal.at < REVEAL_MS ? reveal : void 0;
@@ -5491,8 +5911,18 @@ async function activate(ctx, options = {}) {
     return settingsRead;
   };
   const titleOf2 = (threadId) => own3(cached.state.conversations, threadId)?.title ?? threads.get(threadId)?.title ?? own3(cachedIndex.index.threads, threadId)?.title;
+  const hostOf = (threadId) => remote.hostOf(threadId) ?? own3(cached.state.conversations, threadId)?.hostId ?? own3(cachedIndex.index.threads, threadId)?.hostId;
+  const noteHost = (threadId, hostId) => {
+    if (remote.note(threadId, hostId) && own3(cached.state.conversations, threadId)) maintainSoon();
+  };
+  const hostFrom = (raw, threadId) => {
+    const named = isRecord18(raw) ? raw.hostId : void 0;
+    if (isRemoteHostId(named)) noteHost(threadId, named);
+    return hostOf(threadId);
+  };
+  const viewRef = (index, ref) => refView(index, ref, titleOf2, hostOf);
   const sources = (state, index) => {
-    const refsOf = (threadId) => refsForThread(index, threadId).map((ref) => refView(index, ref, titleOf2));
+    const refsOf = (threadId) => refsForThread(index, threadId).map((ref) => viewRef(index, ref));
     return {
       state,
       info: threads.all(),
@@ -5537,8 +5967,15 @@ async function activate(ctx, options = {}) {
       await threads.refresh(activeIds(state), open2);
       for (const threadId of open2) await threads.lookupChildren(threadId);
       const parents = threads.parentMap();
-      if ([...parents].some(([child, parent]) => state.conversations[child] && state.conversations[child].parentId !== parent))
-        await updateState(paths, (draft) => noteParents(draft, parents));
+      const hosts = [...remote.entries()].filter(([threadId, hostId]) => {
+        const conversation = own3(state.conversations, threadId);
+        return conversation !== void 0 && conversation.hostId !== hostId;
+      });
+      if (hosts.length || [...parents].some(([child, parent]) => state.conversations[child] && state.conversations[child].parentId !== parent))
+        await updateState(paths, (draft) => {
+          noteParents(draft, parents);
+          noteHosts(draft, hosts);
+        });
     } catch (error) {
       log.error("maintain", error);
     } finally {
@@ -5560,7 +5997,8 @@ async function activate(ctx, options = {}) {
     state: currentState,
     index: currentIndex,
     settings: currentSettings,
-    changed: maintainSoon
+    changed: maintainSoon,
+    remote: { hostOf: (threadId) => hostOf(threadId), down: (hostId) => remote.down(hostId), listed: () => remote.listed() }
   });
   const lookups = /* @__PURE__ */ new Set();
   const freshenRefs2 = (keys) => {
@@ -5578,6 +6016,7 @@ async function activate(ctx, options = {}) {
       lastSnapshotAt = Date.now();
       lastUsedAt = Date.now();
       const focused = isRecord18(params.focus) && isThreadId(params.focus.threadId) ? params.focus : void 0;
+      if (focused) hostFrom(focused, focused.threadId);
       if (focused && (focused.surface === "desktop" || focused.surface === "web")) {
         const client = typeof params.client === "string" && CLIENT_ID.test(params.client) ? params.client : void 0;
         const key = client ? `${focused.surface}:${client}` : focused.surface;
@@ -5606,6 +6045,12 @@ async function activate(ctx, options = {}) {
       const pending = pendingReveal();
       const shown = pending && focused?.threadId === pending.threadId ? pending : void 0;
       const left = await oldFolderLeft();
+      const watched = /* @__PURE__ */ new Set([...Object.keys(state.conversations), ...open2, ...focused ? [focused.threadId] : [], ...Object.keys(parents), ...Object.values(parents)]);
+      const hosts = {};
+      for (const threadId of watched) {
+        const hostId = hostOf(threadId);
+        if (hostId) hosts[threadId] = hostId;
+      }
       const version = [
         keyOfState(state),
         threads.version,
@@ -5616,11 +6061,12 @@ async function activate(ctx, options = {}) {
         summarizerKey(),
         `${saved.rev}.${saved.items.length}`,
         shown?.id ?? "-",
-        left ?? "-"
+        left ?? "-",
+        // Where conversations run, and what a card shows of their hosts (a name, connected or not).
+        `${contentKey(hosts)}.${remote.version}`
       ].join("|");
       if (params.version === version) return { version };
-      const watched = /* @__PURE__ */ new Set([...Object.keys(state.conversations), ...open2, ...focused ? [focused.threadId] : [], ...Object.keys(parents), ...Object.values(parents)]);
-      const news = alerts(index).slice(0, ALERTS_SHOWN).map((ref) => refView(index, ref, titleOf2));
+      const news = alerts(index).slice(0, ALERTS_SHOWN).map((ref) => viewRef(index, ref));
       const workspaces = {};
       for (const threadId of /* @__PURE__ */ new Set([...Object.keys(state.conversations), ...Object.keys(state.prompts)])) {
         const cwd = index.threads[threadId]?.cwd;
@@ -5635,6 +6081,7 @@ async function activate(ctx, options = {}) {
         command,
         alerts: news,
         parents,
+        hosts,
         summarizer: summarizer.status(),
         workspaces,
         favorites: saved.items.length,
@@ -5649,8 +6096,24 @@ async function activate(ctx, options = {}) {
     try {
       lastUsedAt = Date.now();
       const threadId = threadIdOf(raw);
+      const hostId = hostFrom(raw, threadId);
+      if (hostId) {
+        if (remote.infoKnown) void remote.refreshInfo();
+        else await within(remote.refreshInfo(), HOST_INFO_WAIT_MS).catch(() => void 0);
+      }
       const [state, index] = [await currentState(), await currentIndex()];
-      const view = conversationView(threadId, sources(state, index));
+      const made = conversationView(threadId, sources(state, index));
+      const linked = (item) => {
+        const on = hostOf(item.threadId);
+        return on ? { ...item, hostId: on } : item;
+      };
+      const view = {
+        ...made,
+        children: made.children.map(linked),
+        ...made.parent ? { parent: linked(made.parent) } : {},
+        ...made.related ? { related: linked(made.related) } : {},
+        ...hostId ? { host: remote.view(hostId) } : {}
+      };
       void threads.refresh([threadId, ...view.children.map((child) => child.threadId), ...view.parent ? [view.parent.threadId] : []]);
       void threads.lookupChildren(threadId).then((changed) => {
         if (changed) maintainSoon();
@@ -5667,7 +6130,12 @@ async function activate(ctx, options = {}) {
       const [state, index] = [await currentState(), await currentIndex()];
       const found = searchConversations({ sources: sources(state, index), index, query: text2(raw, "query"), favorites: (await favorites.current()).items });
       freshenRefs2(found.flatMap((item) => item.refs));
-      return clean(found);
+      return clean(
+        found.map((item) => {
+          const hostId = hostOf(item.threadId);
+          return hostId ? { ...item, hostId } : item;
+        })
+      );
     } catch (error) {
       rethrow(error);
     }
@@ -5675,7 +6143,12 @@ async function activate(ctx, options = {}) {
   ctx.handle("mutate", async (raw) => {
     try {
       const params = parseMutationV2(raw);
-      const { result } = await updateState(paths, (draft, opCtx) => applyMutationV2(draft, params, opCtx));
+      const hostId = hostFrom(raw, params.threadId);
+      const { result } = await updateState(paths, (draft, opCtx) => {
+        const outcome = applyMutationV2(draft, params, opCtx);
+        if (hostId) noteHosts(draft, [[params.threadId, hostId]]);
+        return outcome;
+      });
       maintainSoon();
       return clean({ ok: true, result: result ?? null });
     } catch (error) {
@@ -5683,7 +6156,7 @@ async function activate(ctx, options = {}) {
     }
   });
   const openChild = async (ask) => {
-    const { threadId, state, spinoff, seed, attached } = ask;
+    const { threadId, state, spinoff, seed, attached, hostId } = ask;
     const conversation = state.conversations[threadId];
     const problem = spinoff?.text ?? cleanText(ask.problem);
     const current = conversation ? currentMilestone(conversation) : void 0;
@@ -5694,7 +6167,7 @@ async function activate(ctx, options = {}) {
     let asked = false;
     const reads = /* @__PURE__ */ new Map();
     const readOnce = (id) => {
-      const read = reads.get(id) ?? slowApi.readThread(id);
+      const read = reads.get(id) ?? slowApi.readThread(id, hostId);
       reads.set(id, read);
       return read;
     };
@@ -5715,7 +6188,8 @@ async function activate(ctx, options = {}) {
         locale: state.locale ?? "zh-CN",
         ...current ? { currentMilestone: current.title } : {},
         ...threads.get(threadId)?.harnessId ? { harnessId: threads.get(threadId).harnessId } : {},
-        ...attachments.length ? { attachments } : {}
+        ...attachments.length ? { attachments } : {},
+        ...hostId ? { hostId } : {}
       });
     } catch (error) {
       if (attachments.length) {
@@ -5728,6 +6202,7 @@ async function activate(ctx, options = {}) {
       }
       throw error;
     }
+    if (hostId) remote.note(childThreadId, hostId);
     const kept = attachments.length ? uploads.keep(attached, { child: childThreadId, parent: threadId }).catch((error) => log.error("note which child conversation the files went with", error)) : void 0;
     try {
       await updateState(paths, (draft, opCtx) => {
@@ -5738,6 +6213,11 @@ async function activate(ctx, options = {}) {
           id = addSpinoff(draft, threadId, problem, opCtx).id;
         }
         linkSpinoff(draft, threadId, id, childThreadId, opCtx);
+        if (hostId)
+          noteHosts(draft, [
+            [threadId, hostId],
+            [childThreadId, hostId]
+          ]);
       });
     } catch (error) {
       log.error(`note child conversation ${childThreadId.slice(0, 8)} opened for a spin-off of ${threadId.slice(0, 8)}`, error);
@@ -5745,9 +6225,11 @@ async function activate(ctx, options = {}) {
     } finally {
       await kept;
     }
-    log.info(`opened child conversation ${childThreadId.slice(0, 8)} for a spin-off of ${threadId.slice(0, 8)}${attachments.length ? ` with ${attachments.length} attached files` : ""}`);
+    log.info(
+      `opened child conversation ${childThreadId.slice(0, 8)} for a spin-off of ${threadId.slice(0, 8)}${hostId ? ` on remote host ${shortHost(hostId)}` : ""}${attachments.length ? ` with ${attachments.length} attached files` : ""}`
+    );
     maintainSoon();
-    return { childThreadId };
+    return { childThreadId, ...hostId ? { hostId } : {} };
   };
   const opening = /* @__PURE__ */ new Map();
   ctx.handle("spawn", async (raw) => {
@@ -5756,11 +6238,14 @@ async function activate(ctx, options = {}) {
     let handedOver = false;
     try {
       const threadId = threadIdOf(raw);
+      const hostId = hostFrom(raw, threadId);
       const problem = isRecord18(raw) && typeof raw.text === "string" ? raw.text.trim() : "";
       const spinoffId = text2(raw, "spinoffId");
       if (!spinoffId && !problem) throw new MainlineError("INVALID_ARGUMENT", "spinoffId or text is required");
       if (isRecord18(raw) && raw.attachments !== void 0 && !Array.isArray(raw.attachments))
         throw new MainlineError("INVALID_ARGUMENT", "attachments must be a list of upload ids");
+      if (hostId && attached.length)
+        throw new MainlineError("REMOTE_ATTACHMENTS", "Files cannot go along with a child conversation on another computer: it cannot read the files kept on this one");
       let state = await currentState();
       let spinoff;
       let seed;
@@ -5785,7 +6270,8 @@ async function activate(ctx, options = {}) {
       }
       if (spinoff?.state === "spawned" && spinoff.childThreadId) {
         if (attached.length) await uploads.discard(attached).catch((failure2) => log.error("delete the files sent with a child conversation opened before", failure2));
-        return clean({ childThreadId: spinoff.childThreadId });
+        const childHost = hostOf(spinoff.childThreadId);
+        return clean({ childThreadId: spinoff.childThreadId, ...childHost ? { hostId: childHost } : {} });
       }
       const key = spinoff ? `${threadId}
 ${spinoff.id}` : `${threadId}
@@ -5795,7 +6281,7 @@ ${cleanText(problem)}`;
       if (job) {
         if (attached.length) await uploads.discard(attached).catch((failure2) => log.error("delete the files sent with a child conversation being opened", failure2));
       } else {
-        const started = openChild({ threadId, state, spinoff, problem, seed, attached });
+        const started = openChild({ threadId, state, spinoff, problem, seed, attached, hostId });
         handedOver = true;
         job = started;
         opening.set(key, started);
@@ -5859,6 +6345,7 @@ ${cleanText(problem)}`;
     try {
       const report = parseTree(raw);
       const surface = isRecord18(raw) && raw.surface === "web" ? "web" : "desktop";
+      if (surface === "web") for (const [threadId, hostId] of Object.entries(report.hosts ?? {})) noteHost(threadId, hostId);
       const changed = surface === "web" ? threads.reportWebParents(report.parents) : threads.reportTree(report);
       if (changed) maintainSoon();
       return { ok: true };
@@ -5878,7 +6365,7 @@ ${cleanText(problem)}`;
     return { ok: true };
   });
   const fittingViews = (index, refs2, base) => {
-    const views = refs2.map((ref) => refView(index, ref, titleOf2));
+    const views = refs2.map((ref) => viewRef(index, ref));
     return views.slice(0, fitting(views, base, byteSize));
   };
   ctx.handle("refs.forThread", async (raw) => {
@@ -5896,7 +6383,7 @@ ${cleanText(problem)}`;
     const index = await currentIndex();
     const refs2 = searchRefs(index, text2(raw, "query"), titleOf2);
     freshenRefs2(refs2.map((ref) => ref.key));
-    return clean(refs2.map((ref) => refView(index, ref, titleOf2)));
+    return clean(refs2.map((ref) => viewRef(index, ref)));
   });
   ctx.handle("refs.list", async (raw) => {
     lastUsedAt = Date.now();
@@ -5922,6 +6409,7 @@ ${cleanText(problem)}`;
     const startedAt = Date.now();
     try {
       const threadId = threadIdOf(raw);
+      hostFrom(raw, threadId);
       await inBudget(summarizer.request(threadId), startedAt, `ask for a summary of ${threadId.slice(0, 8)}`);
       return { queued: true };
     } catch (error) {
@@ -5953,6 +6441,7 @@ ${cleanText(problem)}`;
   ctx.handle("refs.seenForThread", async (raw) => {
     try {
       const threadId = threadIdOf(raw);
+      hostFrom(raw, threadId);
       const { result } = await updateIndex(refs, (draft) => markSeenForThread(draft, threadId));
       return clean({ ok: true, keys: result });
     } catch (error) {
@@ -5963,6 +6452,7 @@ ${cleanText(problem)}`;
     try {
       lastUsedAt = Date.now();
       const threadId = threadIdOf(raw);
+      const hostId = hostFrom(raw, threadId);
       const passage = text2(raw, "text");
       if (!passage.trim()) throw new MainlineError("INVALID_ARGUMENT", "text is required");
       const turn = isRecord18(raw) && typeof raw.turn === "number" && Number.isSafeInteger(raw.turn) && raw.turn > 0 ? raw.turn : void 0;
@@ -5972,6 +6462,7 @@ ${cleanText(problem)}`;
       const title = titleOf2(threadId);
       const result = await favorites.add({
         threadId,
+        ...hostId ? { hostId } : {},
         text: passage,
         source: "select",
         ...turn ? { turn } : {},
@@ -5993,7 +6484,10 @@ ${cleanText(problem)}`;
       const offset = Math.min(count(raw, "offset", 0), matched.length);
       const limit = Math.max(1, Math.min(count(raw, "limit", FAVORITES_PAGE), FAVORITES_PAGE_MAX));
       const titleFor = (item) => titleOf2(item.threadId) ?? item.threadTitle;
-      const page = matched.slice(offset, offset + limit).map(excerptOf);
+      const page = matched.slice(offset, offset + limit).map((item) => {
+        const hostId = item.hostId ?? hostOf(item.threadId);
+        return excerptOf(hostId && !item.hostId ? { ...item, hostId } : item);
+      });
       const items = page.slice(0, Math.max(Math.min(page.length, 1), fitting(page, byteSize({ items: [], titles: {}, total: file.items.length, matched: matched.length, nextOffset: matched.length }), (item) => byteSize(item) + byteSize(titleFor(item) ?? "") + byteSize(item.threadId) + 2)));
       const titles = {};
       for (const item of items) {
@@ -6038,7 +6532,8 @@ ${cleanText(problem)}`;
       const favorite = (await favorites.current()).items.find((item) => item.id === id);
       if (!favorite) throw new MainlineError("UNKNOWN_ITEM", "No such saved passage");
       reveal = { id: favorite.id, threadId: favorite.threadId, text: favorite.text, at: Date.now() };
-      return clean({ threadId: favorite.threadId });
+      const hostId = favorite.hostId ?? hostOf(favorite.threadId);
+      return clean({ threadId: favorite.threadId, ...hostId ? { hostId } : {} });
     } catch (error) {
       rethrow(error);
     }
@@ -6112,8 +6607,19 @@ ${cleanText(problem)}`;
   } catch (error) {
     log.error("delete copies earlier versions left behind", error);
   }
+  try {
+    const [state, index, saved] = [await currentState(), await currentIndex(), await favorites.current()];
+    remote.seed([
+      ...Object.values(state.conversations).map((conversation) => [conversation.threadId, conversation.hostId]),
+      ...Object.entries(index.threads).map(([threadId, record]) => [threadId, record.hostId]),
+      ...saved.items.map((item) => [item.threadId, item.hostId])
+    ]);
+  } catch (error) {
+    log.error("find the conversations on other computers", error);
+  }
   scanner.start(3e3);
   summarizer.start();
+  remote.start(REMOTE_FIRST_MS);
   let githubTimer;
   let githubRound;
   let stopped = false;
@@ -6146,7 +6652,8 @@ ${cleanText(problem)}`;
     stopping.abort(new StoppedError());
     const scanned = scanner.stop();
     const summarized = summarizer.stop();
-    const settled = Promise.allSettled([maintaining, githubRound, ...lookups, favorites.settle(), scanned, summarized, ...opening.values()]);
+    const listed = remote.stop();
+    const settled = Promise.allSettled([maintaining, githubRound, ...lookups, favorites.settle(), scanned, summarized, listed, ...opening.values()]);
     await within(settled, STOP_WAIT_MS).catch(() => void 0);
     await within(fileLog.flush(), 100).catch(() => void 0);
   };

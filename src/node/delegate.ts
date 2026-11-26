@@ -4,11 +4,12 @@
  * there. Used by the command line (`mainline spawn`) and the backend (the card's button).
  */
 import { withAttachments, type AttachedFile } from "../core/attachments.js";
+import { isRemoteHostId } from "../core/hosts.js";
 import type { Locale } from "../core/model.js";
 
 export interface DelegationApi {
-  readThread(threadId: string): Promise<{ harnessId?: string; title?: string; status?: string } | undefined>;
-  threadCwd?(threadId: string): Promise<string | undefined>;
+  readThread(threadId: string, hostId?: string): Promise<{ harnessId?: string; title?: string; status?: string } | undefined>;
+  threadCwd?(threadId: string, hostId?: string): Promise<string | undefined>;
   startDelegation(body: Record<string, unknown>): Promise<{ threadId: string }>;
 }
 
@@ -23,6 +24,12 @@ export interface ChildRequest {
   harnessId?: string;
   /** Photos, videos and other files the child gets with its first message. */
   attachments?: readonly AttachedFile[];
+  /**
+   * The remote host the parent runs on, when it is on another computer: the child starts there, in
+   * the parent's folder on that computer. (codexhost cannot watch a child on another computer, and
+   * none is asked to.)
+   */
+  hostId?: string;
 }
 
 /**
@@ -47,9 +54,10 @@ export function childTask(request: ChildRequest): string {
 }
 
 export async function spawnChild(api: DelegationApi, request: ChildRequest): Promise<string> {
-  const parent = await api.readThread(request.parentThreadId);
+  const hostId = isRemoteHostId(request.hostId) ? request.hostId : undefined;
+  const parent = await api.readThread(request.parentThreadId, hostId);
   const harnessId = request.harnessId ?? parent?.harnessId ?? "claude-code";
-  const cwd = await api.threadCwd?.(request.parentThreadId);
+  const cwd = await api.threadCwd?.(request.parentThreadId, hostId);
   const name = Array.from(request.problem.replace(/\s+/gu, " ").trim()).slice(0, 60).join("");
   const started = await api.startDelegation({
     harnessId,
@@ -57,6 +65,7 @@ export async function spawnChild(api: DelegationApi, request: ChildRequest): Pro
     taskName: name,
     parentThreadId: request.parentThreadId,
     ...(cwd ? { cwd } : {}),
+    ...(hostId ? { hostId } : {}),
   });
   return started.threadId;
 }

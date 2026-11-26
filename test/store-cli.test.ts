@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseArgs, resolveDataDir, run } from "../src/cli/main.js";
 import { addTask, createConversation } from "../src/core/conversation-ops.js";
 import { readState, storePaths, updateState, withLock } from "../src/node/store.js";
+import { refsPaths, updateIndex } from "../src/node/refs-store.js";
 import { v1StateText } from "./fixtures/v1.js";
 
 let dir: string;
@@ -159,6 +160,34 @@ describe("cli", () => {
     expect((await cli.run("fav", "remove", items[0]!.id)).out).toContain("✓ 已取消收藏");
     expect((await cli.run("fav", "remove", items[0]!.id)).code).toBe(1);
     expect((await cli.run("show")).out).toContain("mainline fav last");
+  });
+
+  it("uses the indexed remote host for saved replies and children before the mainline knows its host", async () => {
+    const hostId = "remote-peer:test";
+    const reads: Array<string | undefined> = [];
+    const starts: Array<Record<string, unknown>> = [];
+    const cli = harness({ CODEXHOST_THREAD_ID: "parent" }, {
+      readThread: async (_id, host) => { reads.push(host); return { harnessId: "codex" }; },
+      threadCwd: async (_id, host) => { reads.push(host); return "/remote/project"; },
+      startDelegation: async (body) => { starts.push(body); return { threadId: "child" }; },
+    }, {
+      readTurns: async (_id, _range, host) => {
+        reads.push(host);
+        return { totalTurns: 1, turns: [{ turnNumber: 1, status: "completed", messages: [{ role: "agent", text: "A remote reply" }] }] };
+      },
+    });
+    await cli.run("new", "Project");
+    await updateIndex(refsPaths(dir), (index) => {
+      index.threads.parent = { turns: 1, updatedAt: "2026-01-01T00:00:00Z", scannedAt: 1, hostId };
+    });
+    expect(JSON.parse((await cli.run("fav", "last", "--json")).out).favorite).toMatchObject({ hostId, turn: 1 });
+    expect(JSON.parse((await cli.run("fav", "remote reply", "--json")).out).favorite).toMatchObject({ hostId, turn: 1 });
+    const noted = JSON.parse((await cli.run("spinoff", "Child task", "--json")).out);
+    expect((await cli.run("spawn", noted.spinoff.id)).code).toBe(0);
+    expect(reads).toEqual([hostId, hostId, hostId, hostId]);
+    expect(starts).toMatchObject([{ hostId, cwd: "/remote/project", parentThreadId: "parent" }]);
+    const { conversations } = await readState(storePaths(dir));
+    expect([conversations.parent?.hostId, conversations.child?.hostId]).toEqual([hostId, hostId]);
   });
 
   it("notes spin-offs and opens child conversations for them", async () => {

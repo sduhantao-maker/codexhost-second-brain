@@ -217,6 +217,37 @@ button {
   margin-top: 6px;
 }
 
+/* The computer a conversation on another computer runs on, and whether it is connected. */
+.host {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-top: 4px;
+  color: var(--cxm-muted);
+  font-size: 11.5px;
+}
+
+.host-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dot[data-host="connected"] {
+  background: var(--cxm-ok);
+}
+
+.dot[data-host="connecting"] {
+  background: var(--cxm-amber-dot);
+}
+
+.dot[data-host="auth-error"],
+.dot[data-host="offline"] {
+  background: var(--cxm-danger);
+}
+
 .relations,
 .prompts {
   display: grid;

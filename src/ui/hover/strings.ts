@@ -1,5 +1,6 @@
 /** Words of the sidebar hover card, in Chinese and English. Kept apart from src/ui/i18n.ts on purpose. */
 import type { ConversationStatus } from "../../core/conversation.js";
+import type { HostState } from "../../core/hosts.js";
 import { localeOf, type Locale, type ThreadStatus } from "../../core/model.js";
 import type { RefKind, RefState } from "../../core/refs.js";
 
@@ -76,9 +77,18 @@ export interface HoverStrings {
   tooLarge(name: string, limit: string): string;
   tooMany(count: number): string;
   tooMuch(limit: string): string;
+  /** The computer a conversation on another computer runs on: its name and how it is doing, as codexhost's own preview says it. */
+  host(name: string | undefined, state: HostState): string;
+  hostTip: string;
+  /** Why no files go along with a child of a conversation on another computer. */
+  remoteFiles: string;
   time(at: number, now: number): string;
   date(at: number): string;
 }
+
+/** codexhost's own words for how a paired computer is doing. */
+const HOST_STATES_ZH: Record<HostState, string> = { connected: "已连接", connecting: "连接中", "auth-error": "认证失败", offline: "离线", disabled: "已停用", unknown: "状态未知" };
+const HOST_STATES_EN: Record<HostState, string> = { connected: "Connected", connecting: "Connecting", "auth-error": "Auth error", offline: "Offline", disabled: "Disabled", unknown: "State unknown" };
 
 const REASONS_ZH: Record<string, string> = {
   comment: "有新评论",
@@ -181,6 +191,9 @@ const zh: HoverStrings = {
   tooLarge: (name, limit) => `「${name}」超过 ${limit}，没有加上`,
   tooMany: (count) => `最多附带 ${count} 个文件`,
   tooMuch: (limit) => `附件合计不能超过 ${limit}`,
+  host: (name, state) => `${name ?? "另一台电脑"} · ${HOST_STATES_ZH[state]}`,
+  hostTip: "这个对话在另一台电脑上（codexhost Web 连接的远程主机），经本机的 codexhost 读取，在本机凝练",
+  remoteFiles: "这个对话在另一台电脑上，子对话也开在那里，那台电脑读不到本机的文件，所以不能附带照片、文件或视频",
   time: (at, now) => relative(at, now, "zh-CN"),
   date: (at) => new Date(at).toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" }),
 };
@@ -246,6 +259,9 @@ const en: HoverStrings = {
   tooLarge: (name, limit) => `"${name}" is over ${limit} and was left out`,
   tooMany: (count) => `At most ${count} files`,
   tooMuch: (limit) => `Attachments may add up to ${limit} at most`,
+  host: (name, state) => `${name ?? "Another computer"} · ${HOST_STATES_EN[state]}`,
+  hostTip: "This conversation is on another computer (a remote host connected to codexhost Web); it is read through codexhost on this machine and summarized here",
+  remoteFiles: "This conversation is on another computer, where the child opens too, and that computer cannot read files on this one, so no photos, files or videos can go along",
   time: (at, now) => relative(at, now, "en"),
   date: (at) => new Date(at).toLocaleString("en", { dateStyle: "medium", timeStyle: "short" }),
 };

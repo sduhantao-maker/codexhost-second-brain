@@ -1,9 +1,12 @@
 /**
  * Reads Thread titles, states and delegated children from codexhost's local HTTP API, the
- * one its own `codexhost` command line uses. Only read routes are called.
+ * one its own `codexhost` command line uses. Only read routes are called, and the delegation route
+ * when the user confirms a child conversation. A conversation on another computer (a remote host
+ * paired with codexhost Web) is read and listed with its host's id, which codexhost needs to find it.
  */
 import { readFile, stat } from "node:fs/promises";
-import type { ThreadStatus } from "../core/model.js";
+import { hostState, isRemoteHostId, type HostState } from "../core/hosts.js";
+import { isThreadId, type ThreadStatus } from "../core/model.js";
 
 export interface ApiThread {
   threadId: string;
@@ -16,7 +19,8 @@ export interface ApiThread {
 /**
  * One entry of `/v1/thread/list`. codexhost also sends `deepLink` and `recencyAt`. Its status is
  * `running` while a turn is active (also while it waits for the user's answer, which only a read
- * tells) and `completed`, `failed` or `interrupted` otherwise.
+ * tells) and `completed`, `failed` or `interrupted` otherwise. A remote host's list names that host
+ * on every entry (`hostId`); this machine's list names none.
  */
 export interface ListedThread {
   threadId: string;
@@ -26,6 +30,7 @@ export interface ListedThread {
   cwd?: string;
   status?: ThreadStatus;
   harnessId?: string;
+  hostId?: string;
 }
 
 export interface ApiTurn {
@@ -34,11 +39,24 @@ export interface ApiTurn {
   messages: Array<{ role: "user" | "agent"; text: string }>;
 }
 
-/** An answer from codexhost other than 2xx; 4xx means this Thread cannot be read as asked. */
+/** A computer paired with codexhost Web, as `/v1/host/list` says: its name, and whether it is connected. */
+export interface RemoteHostInfo {
+  hostId: string;
+  name?: string;
+  online: boolean;
+  state: HostState;
+}
+
+/**
+ * An answer from codexhost other than 2xx; 4xx means this Thread cannot be read as asked. `code` is
+ * codexhost's own name for the error where it sent one (`RUNTIME_UNREACHABLE`: a remote host it
+ * cannot reach).
+ */
 export class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "HttpError";
@@ -68,8 +86,11 @@ export function normalizeStatus(status: unknown, pendingQuestions?: unknown): Th
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** The host field of a request: only a remote host's id; this machine needs none. */
+const onHost = (hostId: string | undefined) => (isRemoteHostId(hostId) ? { hostId } : {});
+
 function toThread(raw: unknown): ApiThread | undefined {
-  if (!isRecord(raw) || typeof raw.threadId !== "string") return undefined;
+  if (!isRecord(raw) || !isThreadId(raw.threadId)) return undefined;
   return {
     threadId: raw.threadId,
     status: normalizeStatus(raw.status, raw.pendingQuestions),
@@ -123,24 +144,34 @@ export class ExternalApi {
       body: JSON.stringify(body),
       signal: this.signal ? AbortSignal.any([timeout, this.signal]) : timeout,
     });
-    if (!response.ok) throw new HttpError(response.status, `${route} answered HTTP ${response.status}`);
+    if (!response.ok) {
+      // codexhost's name for the error, never its message: that is not kept anywhere.
+      const answer = (await response.json().catch(() => undefined)) as unknown;
+      const code = isRecord(answer) && isRecord(answer.error) && typeof answer.error.code === "string" ? answer.error.code.slice(0, 64) : undefined;
+      throw new HttpError(response.status, `${route} answered HTTP ${response.status}${code ? ` (${code})` : ""}`, code);
+    }
     return response.json();
   }
 
-  async readThread(threadId: string): Promise<ApiThread | undefined> {
-    return toThread(await this.#post("/v1/thread/read", { threadId }));
+  /** A conversation's title, state, agent and working folder; on its remote host when `hostId` names one. */
+  async readThread(threadId: string, hostId?: string): Promise<ApiThread | undefined> {
+    return toThread(await this.#post("/v1/thread/read", { threadId, ...onHost(hostId) }));
   }
 
-  /** One page of all Threads across workspaces, most recently updated first. */
-  async listThreads(options: { cursor?: string; limit?: number } = {}): Promise<{ threads: ListedThread[]; nextCursor: string | null }> {
+  /**
+   * One page of all Threads across workspaces, most recently updated first: this machine's, or with
+   * `hostId` a remote host's (each entry then names that host).
+   */
+  async listThreads(options: { cursor?: string; limit?: number; hostId?: string } = {}): Promise<{ threads: ListedThread[]; nextCursor: string | null }> {
     const raw = await this.#post("/v1/thread/list", {
       limit: options.limit ?? 100,
       sort: "updated-desc",
       ...(options.cursor ? { cursor: options.cursor } : {}),
+      ...onHost(options.hostId),
     });
     if (!isRecord(raw) || !Array.isArray(raw.threads)) return { threads: [], nextCursor: null };
     const threads = raw.threads.flatMap((thread): ListedThread[] => {
-      if (!isRecord(thread) || typeof thread.threadId !== "string" || typeof thread.updatedAt !== "string") return [];
+      if (!isRecord(thread) || !isThreadId(thread.threadId) || typeof thread.updatedAt !== "string") return [];
       return [
         {
           threadId: thread.threadId,
@@ -150,15 +181,16 @@ export class ExternalApi {
           ...(typeof thread.cwd === "string" && thread.cwd ? { cwd: thread.cwd } : {}),
           ...(typeof thread.status === "string" ? { status: normalizeStatus(thread.status) } : {}),
           ...(typeof thread.harnessId === "string" ? { harnessId: thread.harnessId } : {}),
+          ...onHost(typeof thread.hostId === "string" ? thread.hostId : undefined),
         },
       ];
     });
     return { threads, nextCursor: typeof raw.nextCursor === "string" ? raw.nextCursor : null };
   }
 
-  /** Turns with the user's messages and the final agent reply; the latest 10 without a range. */
-  async readTurns(threadId: string, range?: { from: number; to: number }): Promise<{ totalTurns: number; turns: ApiTurn[] }> {
-    const raw = await this.#post("/v1/thread/read", { threadId, view: "messages", ...(range ?? {}) });
+  /** Turns with the user's messages and the final agent reply; the latest 10 without a range. On its remote host when `hostId` names one. */
+  async readTurns(threadId: string, range?: { from: number; to: number }, hostId?: string): Promise<{ totalTurns: number; turns: ApiTurn[] }> {
+    const raw = await this.#post("/v1/thread/read", { threadId, view: "messages", ...(range ?? {}), ...onHost(hostId) });
     if (!isRecord(raw)) return { totalTurns: 0, turns: [] };
     const turns = Array.isArray(raw.turns)
       ? raw.turns.flatMap((turn): ApiTurn[] => {
@@ -176,8 +208,22 @@ export class ExternalApi {
     return { totalTurns: typeof raw.totalTurns === "number" ? raw.totalTurns : 0, turns };
   }
 
-  async threadCwd(threadId: string): Promise<string | undefined> {
-    return (await this.readThread(threadId))?.cwd;
+  async threadCwd(threadId: string, hostId?: string): Promise<string | undefined> {
+    return (await this.readThread(threadId, hostId))?.cwd;
+  }
+
+  /**
+   * The computers paired with codexhost Web (`/v1/host/list`): their ids, names and whether they
+   * are connected. Nothing else codexhost says about them (projects, folders) is read.
+   */
+  async listHosts(): Promise<RemoteHostInfo[]> {
+    const raw = await this.#post("/v1/host/list", {});
+    if (!isRecord(raw) || !Array.isArray(raw.hosts)) return [];
+    return raw.hosts.flatMap((host): RemoteHostInfo[] => {
+      if (!isRecord(host) || !isRemoteHostId(host.hostId)) return [];
+      const name = typeof host.displayName === "string" ? Array.from(host.displayName.trim()).slice(0, 120).join("") : "";
+      return [{ hostId: host.hostId, ...(name ? { name } : {}), online: host.online === true, state: hostState(host.state) }];
+    });
   }
 
   /**
@@ -199,8 +245,9 @@ export class ExternalApi {
     return { threadId: raw.threadId };
   }
 
-  async listChildren(parentThreadId: string): Promise<ApiThread[]> {
-    const raw = await this.#post("/v1/thread/list", { parentThreadId, limit: 100 });
+  /** A conversation's delegated children; on its remote host when `hostId` names one (they are there too). */
+  async listChildren(parentThreadId: string, hostId?: string): Promise<ApiThread[]> {
+    const raw = await this.#post("/v1/thread/list", { parentThreadId, limit: 100, ...onHost(hostId) });
     if (!isRecord(raw) || !Array.isArray(raw.threads)) return [];
     return raw.threads.flatMap((thread) => toThread(thread) ?? []);
   }

@@ -1,5 +1,19 @@
 # 更新记录 / Changelog
 
+## 0.10.4
+
+修了 codexhost Web 里其他电脑上的对话没有主线的问题。codexhost Web 连接了其他电脑（远程主机）时，侧栏里也列出那些电脑上的对话，但插件只认本机的对话：悬停这些对话时卡片只写「读取失败：Extension backend could not complete the call」，它们也从不凝练。现在插件认得这些对话，读它们、凝练它们、开子对话时都带上它所在的远程主机，悬停卡片写明它在哪台电脑上、连接着没有（例如「我的主机 · 已连接」）。插件在用时每分钟、不用时每 10 分钟问一次每台已连接电脑最近更新的对话，所以那边有了新回复也会像本机的对话一样凝练；没连接的电脑不问，问不到的先等 1 分钟，之后每次加倍，最长半小时，都不拖慢本机的对话。从这些对话开的子对话开在同一台电脑上、父对话的文件夹里；那台电脑读不到本机的文件，所以这时不能附带照片、文件或视频，卡片里会说明。在「🔔 N」列表、总览页的「跳转」和「跳回原文」里打开它们，也会在 codexhost Web 里打开那台电脑上的对话。这些对话同样经本机 codexhost 的本机接口读取、在本机凝练，发给模型的内容和本机的对话一样；日志里只写远程主机编号的前 8 位，不写名字。
+
+还修了一处：codexhost Web 和 Codex Desktop 里还没发出的新对话（草稿）不再被当成对话去读。以前插件会读 `draft-19` 这样的编号，codexhost 答复 HTTP 400，日志里留下一行错误。
+
+悬停卡片显示时（鼠标停在对话行上、卡片快要弹出时也一样），Codex Desktop 和 codexhost Web 自己的会话预览不再同时显示，卡片收起后照常显示。codexhost Web 的深色预览可以点击复制，卡片显示时用不了这个功能。
+
+Fixed conversations on other computers getting no mainline in codexhost Web. When codexhost Web is connected to other computers (remote hosts), its sidebar lists their conversations too, but the extension knew only those of this machine: hovering one showed only "Could not load: Extension backend could not complete the call", and none of them was ever summarized. They are recognized now: reading them, summarizing them and opening child conversations from them names the remote host they are on, and the hover card says which computer one is on and whether it is connected (for example "My host · Connected"). The extension asks each connected computer for its recently updated conversations every minute while it is in use and every 10 minutes otherwise, so new replies there are summarized like those of this machine; a computer that is not connected is not asked, and one that cannot be reached waits a minute, then twice as long each time up to half an hour, without slowing down the conversations on this machine. A child conversation of one opens on the same computer, in the parent's folder there; that computer cannot read the files on this one, so no photos, files or videos can go along then, and the card says so. Open conversation in the 🔔 N list, and Go and Go to passage in the overview, open such a conversation on its computer in codexhost Web. These conversations are read through codexhost's local API on this machine and summarized here, and what goes to a model is the same as for a local one; the log names a remote host by the first 8 characters of its id only, never by its name.
+
+Also fixed: new conversations not sent yet (drafts) in codexhost Web and Codex Desktop are no longer read as conversations. The extension used to read ids such as `draft-19`, which codexhost answered with HTTP 400, leaving an error line in the log.
+
+While the hover card shows (and while the pointer rests on a conversation row before it opens), Codex Desktop's and codexhost Web's own preview of the row no longer shows beside it; it works as before once the card is gone. codexhost Web's dark preview can be clicked to copy; that is not available while the card shows.
+
 ## 0.10.3
 
 修了 PR 与 Issue 的 🔔 自己消失、或者根本看不到的问题。以前打开（或切换到）提出它的对话就算看过了：可主线胶囊默认关闭，打开对话时看不到任何新动态；同时开着两个停在不同对话上的 Web 页面（codexhost 窗口和浏览器标签页）时，每次轮询都算一次切换，🔔 几秒内就被清掉。现在 🔔 只在你处理它时消失：🔔 或悬停卡片里的新动态显示着时点这个对话的侧栏行，在卡片里点「知道了」，在下面说的列表里点「打开对话」或「知道了」，或在「PR 与 Issue」页签里点「跳转」。后台按窗口分别记每个窗口打开的对话，几个窗口停在不同对话上不再算切换。🔔 现在要等你处理才消失，所以同时挂 🔔 的 PR 和 issue 从最多 10 个放宽到 50 个，免得还没处理的被挤掉。

@@ -754,12 +754,12 @@ describe("thread facts", () => {
       },
     } as unknown as ExternalApi;
     const threads = new ThreadInfoService(api, { info: () => undefined, error: (message) => errors.push(message) }, () => now);
-    await threads.refresh(["draft-e0aa"]);
+    await threads.refresh(["gone-e0aa"]);
     now += 60_000;
-    await threads.refresh(["draft-e0aa"]);
+    await threads.refresh(["gone-e0aa"]);
     expect([reads, errors.length]).toEqual([1, 1]);
     now += 10 * 60_000;
-    await threads.refresh(["draft-e0aa"]);
+    await threads.refresh(["gone-e0aa"]);
     expect([reads, errors.length]).toEqual([2, 1]);
   });
 });
