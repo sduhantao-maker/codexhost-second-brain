@@ -1822,7 +1822,7 @@ var zh2 = {
   refs: "PR \u4E0E Issue",
   moreRefs: (count) => `\u8FD8\u6709 ${count} \u4E2A`,
   kind: { pr: "PR", issue: "Issue" },
-  refState: { open: "\u8FDB\u884C\u4E2D", closed: "\u5DF2\u5173\u95ED", merged: "\u5DF2\u5408\u5E76" },
+  refState: { open: "\u8FDB\u884C\u4E2D", closed: "\u5DF2\u5173\u95ED", merged: "\u5DF2\u5408\u5E76", unknown: "\u72B6\u6001\u5F85\u786E\u8BA4" },
   origin: "\u8D77\u56E0\uFF1A",
   lastPrompt: "\u6700\u8FD1\u8BF7\u6C42\uFF1A",
   loading: "\u6B63\u5728\u8BFB\u53D6\u2026",
@@ -1887,7 +1887,7 @@ var en2 = {
   refs: "PRs and issues",
   moreRefs: (count) => `${count} more`,
   kind: { pr: "PR", issue: "Issue" },
-  refState: { open: "Open", closed: "Closed", merged: "Merged" },
+  refState: { open: "Open", closed: "Closed", merged: "Merged", unknown: "Status unknown" },
   origin: "Started with:",
   lastPrompt: "Last request:",
   loading: "Loading\u2026",
@@ -2984,6 +2984,7 @@ function refs(view, ctx) {
 }
 function refRow(ref, ctx, onFollow) {
   const { h, t } = ctx;
+  const state = ref.state ?? "unknown";
   const href = /^https:\/\//iu.test(ref.url) ? ref.url : void 0;
   return h(
     "a",
@@ -3000,7 +3001,7 @@ function refRow(ref, ctx, onFollow) {
     },
     h("span", { class: "ref-number", text: `${t.kind[ref.kind] ?? ref.kind} #${ref.number}` }),
     h("span", { class: "ref-title", text: ref.title ?? ref.repo }),
-    ref.state ? h("span", { class: "ref-state", text: t.refState[ref.state] ?? ref.state, attrs: { "data-state": ref.state } }) : null
+    h("span", { class: "ref-state", text: t.refState[state] ?? state, attrs: { "data-state": state } })
   );
 }
 

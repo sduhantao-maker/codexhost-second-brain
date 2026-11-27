@@ -95,9 +95,10 @@ export async function lookUpRef(runGh: RunGh, ref: Pick<Ref, "repo" | "number">)
     const raw = JSON.parse(
       await runGh(["api", `repos/${ref.repo}/issues/${ref.number}`, "--jq", "{title: .title, state: .state, merged: (.pull_request.merged_at != null)}"]),
     ) as { title?: unknown; state?: unknown; merged?: unknown };
+    if (raw.state !== "open" && raw.state !== "closed") return {};
     return {
       ...(typeof raw.title === "string" ? { title: raw.title } : {}),
-      state: raw.merged === true ? "merged" : raw.state === "closed" ? "closed" : "open",
+      state: raw.merged === true ? "merged" : raw.state,
     };
   } catch {
     return {};
@@ -130,10 +131,12 @@ export async function freshenRefs(
   const index = await readIndex(paths);
   const maxAge = options.maxAgeMs ?? FRESH_MS;
   const { checked } = options;
-  const lastCheck = (ref: Ref) => Math.max(ref.checkedAt ?? 0, checked?.get(ref.key) ?? 0);
+  // Older indexes also stamped failed requests. Without a state, trust only this process's cooldown.
+  const lastCheck = (ref: Ref) => Math.max(ref.state ? ref.checkedAt ?? 0 : 0, checked?.get(ref.key) ?? 0);
   const stale = [...new Set(keys)]
     .map((key) => index.refs[key])
     .filter((ref): ref is Ref => ref !== undefined && (!lastCheck(ref) || options.now - lastCheck(ref) > maxAge))
+    .sort((a, b) => Number(Boolean(a.state)) - Number(Boolean(b.state)))
     .slice(0, options.limit ?? FRESHEN_LIMIT);
   if (!stale.length) return 0;
   const found = await Promise.all(stale.map(async (ref) => [ref.key, await lookUpRef(runGh, ref)] as const));
@@ -141,14 +144,14 @@ export async function freshenRefs(
   await updateIndex(paths, (draft) => {
     for (const [key, facts] of found) {
       const ref = draft.refs[key];
-      if (!ref) continue;
+      if (!ref || !facts.state) continue;
       const title = facts.title ? facts.title.slice(0, 200) : undefined;
-      const same = (title === undefined || title === ref.title) && (facts.state === undefined || facts.state === ref.state);
+      const same = (title === undefined || title === ref.title) && facts.state === ref.state;
       // Nothing new, and the index's time is recent enough: the file stays as it is.
       if (same && checked && ref.checkedAt !== undefined && options.now - ref.checkedAt < CHECK_WRITTEN_AFTER_MS) continue;
       ref.checkedAt = options.now;
       if (title) ref.title = title;
-      if (facts.state) ref.state = facts.state;
+      ref.state = facts.state;
     }
   });
   return stale.length;

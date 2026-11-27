@@ -53,6 +53,7 @@ import type { BackendContext } from "../host/types.js";
 import { spawnChild, type DelegationApi } from "../node/delegate.js";
 import { favoritesPaths } from "../node/favorites-store.js";
 import { commandPath } from "../node/paths.js";
+import { FRESHEN_LIMIT } from "../node/refs-github.js";
 import { readIndex, refsPaths, updateIndex } from "../node/refs-store.js";
 import { fileSignature, readState, stateSignature, storePaths, updateState } from "../node/store.js";
 import { DeadlineError, HANDLER_BUDGET_MS, isStopped, leftOf, StoppedError, untilAborted, within } from "./deadline.js";
@@ -90,6 +91,8 @@ const REMOTE_EVERY_MS = 60_000;
 const REMOTE_FIRST_MS = 10_000;
 /** A card of a conversation on another computer waits this long at most for codexhost to say what its host is called. */
 const HOST_INFO_WAIT_MS = 1_500;
+/** On the first card, give a missing GitHub state a moment to arrive; slow requests continue. */
+const REF_STATE_WAIT_MS = 500;
 /** Conversations on other computers a surface may name in one report of its sidebar. */
 const REPORTED_HOSTS = 500;
 /** A surface's id for itself (`SnapshotParams.client`): random letters, digits and dashes. */
@@ -472,18 +475,22 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
     remote: { hostOf: (threadId) => hostOf(threadId), down: (hostId) => remote.down(hostId), listed: () => remote.listed() },
   });
   /** Background lookups still running; stopping the backend waits for them. */
-  const lookups = new Set<Promise<void>>();
+  const lookups = new Set<Promise<number>>();
   /**
    * Looks the PRs and issues being viewed up on GitHub again (when gh may be used), in the
    * background: the view answers at once, and a changed state reaches it with the next snapshot.
    */
-  const freshenRefs = (keys: readonly string[]) => {
-    if (!keys.length) return;
+  const freshenRefs = (keys: readonly string[], limit = FRESHEN_LIMIT): Promise<number> => {
+    if (!keys.length || limit <= 0 || stopping.signal.aborted) return Promise.resolve(0);
     const lookup = (async () => {
-      if ((await currentSettings()).prAlerts) await github.freshen(keys);
-    })().catch((error: unknown) => log.error("look up PR states", error));
+      return (await currentSettings()).prAlerts ? github.freshen(keys, { limit }) : 0;
+    })().catch((error: unknown) => {
+      log.error("look up PR states", error);
+      return 0;
+    });
     lookups.add(lookup);
     void lookup.finally(() => lookups.delete(lookup));
+    return lookup;
   };
 
   /** Everything the overview shows of the summaries (progress, today's counts, the last error), so it sees them change. */
@@ -620,8 +627,15 @@ export async function activate(ctx: BackendContext, options: BackendOptions = {}
       void threads.lookupChildren(threadId).then((changed) => {
         if (changed) maintainSoon();
       });
-      // What the card shows about its PRs and issues is looked up again when it is over a minute old.
-      freshenRefs(view.refs.map((ref) => ref.key));
+      const missing = view.refs.filter((ref) => !ref.state).map((ref) => ref.key);
+      const fill = freshenRefs(missing);
+      const known = view.refs.filter((ref) => ref.state).map((ref) => ref.key);
+      // Use the remaining lookup budget for cached states, without waiting for those on the card.
+      void fill.then((asked) => freshenRefs(known, FRESHEN_LIMIT - asked));
+      if (missing.length && (await within(fill, REF_STATE_WAIT_MS).catch(() => 0))) {
+        const latest = await currentIndex();
+        view.refs = refsForThread(latest, threadId).map((ref) => viewRef(latest, ref));
+      }
       return clean(fitView(view));
     } catch (error) {
       rethrow(error);

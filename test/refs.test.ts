@@ -524,6 +524,41 @@ describe("GitHub watcher", () => {
     expect((await readIndex(paths)).refs["o/r#1"]).toMatchObject({ state: "closed", checkedAt: now });
   });
 
+  it("retries unknown issue states after a brief cooldown and never records a failed check as fresh", async () => {
+    const paths = await seed();
+    let now = Date.parse("2026-11-23T14:00:00Z");
+    const key = "o/r#2";
+    const watcher = new GitHubWatcher(paths, silent, async () => JSON.stringify({ message: "Unavailable" }), () => now);
+    await watcher.enrich();
+    expect((await readIndex(paths)).refs[key]).not.toHaveProperty("state");
+    expect((await readIndex(paths)).refs[key]).not.toHaveProperty("checkedAt");
+    expect(await watcher.freshen([key])).toBe(0);
+    now += 61_000;
+    expect(await watcher.freshen([key])).toBe(1);
+    expect((await readIndex(paths)).refs[key]).not.toHaveProperty("checkedAt");
+    expect(await watcher.freshen([key])).toBe(0);
+  });
+
+  it("tries an older issue before repeating a round of failed lookups", async () => {
+    const paths = refsPaths(dir);
+    let now = Date.parse("2026-11-23T14:00:00Z");
+    await updateIndex(paths, (index) => {
+      for (let number = 1; number <= 21; number++) {
+        const link = extractLinks(`https://github.com/o/r/issues/${number}`)[0]!;
+        addMention(index, link, { threadId: "t", turn: 1, at: number, role: "agent" });
+      }
+    });
+    const watcher = new GitHubWatcher(paths, silent, async ([, route]) => {
+      if (route?.endsWith("/1")) return JSON.stringify({ state: "closed" });
+      throw new Error("unavailable");
+    }, () => now);
+    await watcher.enrich();
+    expect((await readIndex(paths)).refs["o/r#1"]?.state).toBeUndefined();
+    now += 61_000;
+    await watcher.enrich();
+    expect((await readIndex(paths)).refs["o/r#1"]?.state).toBe("closed");
+  });
+
   it("looks into every PR with news, a few at a time", async () => {
     const paths = refsPaths(dir);
     await updateIndex(paths, (index) => {

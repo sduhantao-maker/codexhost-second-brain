@@ -2000,6 +2000,104 @@ async function updateIndex(paths, mutate, timeoutMs) {
   );
 }
 
+// src/node/refs-github.ts
+var NEWS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
+  repository(owner: $owner, name: $name) {
+    issueOrPullRequest(number: $number) {
+      ... on PullRequest {
+        title state mergedAt mergedBy { __typename login }
+        comments(last: 50) { nodes { createdAt author { __typename login } } }
+        reviews(last: 50) { nodes { submittedAt state author { __typename login } } }
+      }
+      ... on Issue {
+        title state
+        comments(last: 50) { nodes { createdAt author { __typename login } } }
+      }
+    }
+  }
+}`;
+var isRecord6 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var nodes = (connection) => isRecord6(connection) && Array.isArray(connection.nodes) ? connection.nodes.filter(isRecord6) : [];
+var timeOf = (value) => typeof value === "string" ? Date.parse(value) : Number.NaN;
+function actor(raw) {
+  if (!isRecord6(raw) || typeof raw.login !== "string") return { bot: false };
+  return { login: raw.login, bot: raw.__typename === "Bot" || /\[bot\]$/iu.test(raw.login) };
+}
+async function lookUpNews(runGh, ref) {
+  const [owner = "", name = ""] = ref.repo.split("/");
+  let raw;
+  try {
+    raw = JSON.parse(
+      await runGh(["api", "graphql", "-f", `query=${NEWS_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${ref.number}`])
+    );
+  } catch {
+    return void 0;
+  }
+  const data = isRecord6(raw) && isRecord6(raw.data) ? raw.data : void 0;
+  const item = data && isRecord6(data.repository) && isRecord6(data.repository.issueOrPullRequest) ? data.repository.issueOrPullRequest : void 0;
+  if (!data || !item) return void 0;
+  const events = [];
+  for (const comment of nodes(item.comments)) {
+    const at = timeOf(comment.createdAt);
+    if (Number.isFinite(at)) events.push({ kind: "comment", at, ...actor(comment.author) });
+  }
+  for (const review of nodes(item.reviews)) {
+    const at = timeOf(review.submittedAt);
+    if (Number.isFinite(at)) events.push({ kind: "review", at, ...typeof review.state === "string" ? { state: review.state } : {}, ...actor(review.author) });
+  }
+  const mergedAt = timeOf(item.mergedAt);
+  if (Number.isFinite(mergedAt)) events.push({ kind: "merged", at: mergedAt, ...actor(item.mergedBy) });
+  const state = item.state === "MERGED" || Number.isFinite(mergedAt) ? "merged" : item.state === "CLOSED" ? "closed" : item.state === "OPEN" ? "open" : void 0;
+  const viewer = isRecord6(data.viewer) && typeof data.viewer.login === "string" ? data.viewer.login : void 0;
+  return {
+    facts: { ...typeof item.title === "string" ? { title: item.title } : {}, ...state ? { state } : {} },
+    ...viewer ? { viewer } : {},
+    events
+  };
+}
+async function lookUpRef(runGh, ref) {
+  try {
+    const raw = JSON.parse(
+      await runGh(["api", `repos/${ref.repo}/issues/${ref.number}`, "--jq", "{title: .title, state: .state, merged: (.pull_request.merged_at != null)}"])
+    );
+    if (raw.state !== "open" && raw.state !== "closed") return {};
+    return {
+      ...typeof raw.title === "string" ? { title: raw.title } : {},
+      state: raw.merged === true ? "merged" : raw.state
+    };
+  } catch {
+    return {};
+  }
+}
+var FRESH_MS = 6e4;
+var FRESHEN_LIMIT = 6;
+var CHECK_WRITTEN_AFTER_MS = 10 * 6e4;
+async function freshenRefs(paths, keys, runGh, options) {
+  if (!keys.length) return 0;
+  const index = await readIndex(paths);
+  const maxAge = options.maxAgeMs ?? FRESH_MS;
+  const { checked } = options;
+  const lastCheck = (ref) => Math.max(ref.state ? ref.checkedAt ?? 0 : 0, checked?.get(ref.key) ?? 0);
+  const stale = [...new Set(keys)].map((key) => index.refs[key]).filter((ref) => ref !== void 0 && (!lastCheck(ref) || options.now - lastCheck(ref) > maxAge)).sort((a, b) => Number(Boolean(a.state)) - Number(Boolean(b.state))).slice(0, options.limit ?? FRESHEN_LIMIT);
+  if (!stale.length) return 0;
+  const found = await Promise.all(stale.map(async (ref) => [ref.key, await lookUpRef(runGh, ref)]));
+  for (const [key] of found) checked?.set(key, options.now);
+  await updateIndex(paths, (draft) => {
+    for (const [key, facts] of found) {
+      const ref = draft.refs[key];
+      if (!ref || !facts.state) continue;
+      const title = facts.title ? facts.title.slice(0, 200) : void 0;
+      const same = (title === void 0 || title === ref.title) && facts.state === ref.state;
+      if (same && checked && ref.checkedAt !== void 0 && options.now - ref.checkedAt < CHECK_WRITTEN_AFTER_MS) continue;
+      ref.checkedAt = options.now;
+      if (title) ref.title = title;
+      ref.state = facts.state;
+    }
+  });
+  return stale.length;
+}
+
 // src/backend/deadline.ts
 var HANDLER_BUDGET_MS = 8e3;
 var DeadlineError = class extends Error {
@@ -2067,10 +2165,10 @@ function normalizeStatus(status, pendingQuestions) {
   if (value.includes("wait") || value.includes("input") || value.includes("approval")) return "waiting";
   return "idle";
 }
-var isRecord6 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isRecord7 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var onHost = (hostId) => isRemoteHostId(hostId) ? { hostId } : {};
 function toThread(raw) {
-  if (!isRecord6(raw) || !isThreadId(raw.threadId)) return void 0;
+  if (!isRecord7(raw) || !isThreadId(raw.threadId)) return void 0;
   return {
     threadId: raw.threadId,
     status: normalizeStatus(raw.status, raw.pendingQuestions),
@@ -2105,7 +2203,7 @@ var ExternalApi = class {
     const key = `${info.mtimeMs}:${info.size}`;
     if (this.#cache?.key === key) return this.#cache;
     const raw = JSON.parse(await readFile2(this.credentialsPath, "utf8"));
-    if (!isRecord6(raw) || typeof raw.endpoint !== "string" || typeof raw.token !== "string") return void 0;
+    if (!isRecord7(raw) || typeof raw.endpoint !== "string" || typeof raw.token !== "string") return void 0;
     if (!isLoopback(raw.endpoint)) return void 0;
     this.#cache = { key, endpoint: raw.endpoint.replace(/\/+$/u, ""), token: raw.token };
     return this.#cache;
@@ -2123,7 +2221,7 @@ var ExternalApi = class {
     });
     if (!response.ok) {
       const answer = await response.json().catch(() => void 0);
-      const code3 = isRecord6(answer) && isRecord6(answer.error) && typeof answer.error.code === "string" ? answer.error.code.slice(0, 64) : void 0;
+      const code3 = isRecord7(answer) && isRecord7(answer.error) && typeof answer.error.code === "string" ? answer.error.code.slice(0, 64) : void 0;
       throw new HttpError(response.status, `${route} answered HTTP ${response.status}${code3 ? ` (${code3})` : ""}`, code3);
     }
     return response.json();
@@ -2143,9 +2241,9 @@ var ExternalApi = class {
       ...options.cursor ? { cursor: options.cursor } : {},
       ...onHost(options.hostId)
     });
-    if (!isRecord6(raw) || !Array.isArray(raw.threads)) return { threads: [], nextCursor: null };
+    if (!isRecord7(raw) || !Array.isArray(raw.threads)) return { threads: [], nextCursor: null };
     const threads = raw.threads.flatMap((thread2) => {
-      if (!isRecord6(thread2) || !isThreadId(thread2.threadId) || typeof thread2.updatedAt !== "string") return [];
+      if (!isRecord7(thread2) || !isThreadId(thread2.threadId) || typeof thread2.updatedAt !== "string") return [];
       return [
         {
           threadId: thread2.threadId,
@@ -2164,11 +2262,11 @@ var ExternalApi = class {
   /** Turns with the user's messages and the final agent reply; the latest 10 without a range. On its remote host when `hostId` names one. */
   async readTurns(threadId, range, hostId) {
     const raw = await this.#post("/v1/thread/read", { threadId, view: "messages", ...range ?? {}, ...onHost(hostId) });
-    if (!isRecord6(raw)) return { totalTurns: 0, turns: [] };
+    if (!isRecord7(raw)) return { totalTurns: 0, turns: [] };
     const turns = Array.isArray(raw.turns) ? raw.turns.flatMap((turn) => {
-      if (!isRecord6(turn) || typeof turn.turnNumber !== "number") return [];
+      if (!isRecord7(turn) || typeof turn.turnNumber !== "number") return [];
       const messages = Array.isArray(turn.messages) ? turn.messages.flatMap(
-        (message) => isRecord6(message) && typeof message.text === "string" ? [{ role: message.role === "user" ? "user" : "agent", text: message.text }] : []
+        (message) => isRecord7(message) && typeof message.text === "string" ? [{ role: message.role === "user" ? "user" : "agent", text: message.text }] : []
       ) : [];
       return [{ turnNumber: turn.turnNumber, status: typeof turn.status === "string" ? turn.status : "", messages }];
     }) : [];
@@ -2183,9 +2281,9 @@ var ExternalApi = class {
    */
   async listHosts() {
     const raw = await this.#post("/v1/host/list", {});
-    if (!isRecord6(raw) || !Array.isArray(raw.hosts)) return [];
+    if (!isRecord7(raw) || !Array.isArray(raw.hosts)) return [];
     return raw.hosts.flatMap((host) => {
-      if (!isRecord6(host) || !isRemoteHostId(host.hostId)) return [];
+      if (!isRecord7(host) || !isRemoteHostId(host.hostId)) return [];
       const name = typeof host.displayName === "string" ? Array.from(host.displayName.trim()).slice(0, 120).join("") : "";
       return [{ hostId: host.hostId, ...name ? { name } : {}, online: host.online === true, state: hostState(host.state) }];
     });
@@ -2200,18 +2298,18 @@ var ExternalApi = class {
     try {
       raw = await this.#post("/v1/delegate/start", body);
     } catch (error) {
-      const cause = error instanceof Error && isRecord6(error.cause) ? error.cause : void 0;
+      const cause = error instanceof Error && isRecord7(error.cause) ? error.cause : void 0;
       if (cause?.code === "ECONNREFUSED") throw new ApiNotReachedError("codexhost's local API is not running", { cause: error });
       throw error;
     }
     if (raw === void 0) throw new ApiNotReachedError("codexhost's local API is not available");
-    if (!isRecord6(raw) || typeof raw.threadId !== "string") throw new Error("codexhost did not return the new conversation");
+    if (!isRecord7(raw) || typeof raw.threadId !== "string") throw new Error("codexhost did not return the new conversation");
     return { threadId: raw.threadId };
   }
   /** A conversation's delegated children; on its remote host when `hostId` names one (they are there too). */
   async listChildren(parentThreadId, hostId) {
     const raw = await this.#post("/v1/thread/list", { parentThreadId, limit: 100, ...onHost(hostId) });
-    if (!isRecord6(raw) || !Array.isArray(raw.threads)) return [];
+    if (!isRecord7(raw) || !Array.isArray(raw.threads)) return [];
     return raw.threads.flatMap((thread2) => toThread(thread2) ?? []);
   }
 };
@@ -2330,103 +2428,6 @@ function createGhRunner(executable = findGh(), timeoutMs = 2e4) {
       (code3) => code3 === 0 ? resolve(out) : reject(new Error((err.trim().split("\n")[0] || `gh exited with ${String(code3)}`).slice(0, 200)))
     );
   });
-}
-
-// src/node/refs-github.ts
-var NEWS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
-  viewer { login }
-  repository(owner: $owner, name: $name) {
-    issueOrPullRequest(number: $number) {
-      ... on PullRequest {
-        title state mergedAt mergedBy { __typename login }
-        comments(last: 50) { nodes { createdAt author { __typename login } } }
-        reviews(last: 50) { nodes { submittedAt state author { __typename login } } }
-      }
-      ... on Issue {
-        title state
-        comments(last: 50) { nodes { createdAt author { __typename login } } }
-      }
-    }
-  }
-}`;
-var isRecord7 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-var nodes = (connection) => isRecord7(connection) && Array.isArray(connection.nodes) ? connection.nodes.filter(isRecord7) : [];
-var timeOf = (value) => typeof value === "string" ? Date.parse(value) : Number.NaN;
-function actor(raw) {
-  if (!isRecord7(raw) || typeof raw.login !== "string") return { bot: false };
-  return { login: raw.login, bot: raw.__typename === "Bot" || /\[bot\]$/iu.test(raw.login) };
-}
-async function lookUpNews(runGh, ref) {
-  const [owner = "", name = ""] = ref.repo.split("/");
-  let raw;
-  try {
-    raw = JSON.parse(
-      await runGh(["api", "graphql", "-f", `query=${NEWS_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${ref.number}`])
-    );
-  } catch {
-    return void 0;
-  }
-  const data = isRecord7(raw) && isRecord7(raw.data) ? raw.data : void 0;
-  const item = data && isRecord7(data.repository) && isRecord7(data.repository.issueOrPullRequest) ? data.repository.issueOrPullRequest : void 0;
-  if (!data || !item) return void 0;
-  const events = [];
-  for (const comment of nodes(item.comments)) {
-    const at = timeOf(comment.createdAt);
-    if (Number.isFinite(at)) events.push({ kind: "comment", at, ...actor(comment.author) });
-  }
-  for (const review of nodes(item.reviews)) {
-    const at = timeOf(review.submittedAt);
-    if (Number.isFinite(at)) events.push({ kind: "review", at, ...typeof review.state === "string" ? { state: review.state } : {}, ...actor(review.author) });
-  }
-  const mergedAt = timeOf(item.mergedAt);
-  if (Number.isFinite(mergedAt)) events.push({ kind: "merged", at: mergedAt, ...actor(item.mergedBy) });
-  const state = item.state === "MERGED" || Number.isFinite(mergedAt) ? "merged" : item.state === "CLOSED" ? "closed" : item.state === "OPEN" ? "open" : void 0;
-  const viewer = isRecord7(data.viewer) && typeof data.viewer.login === "string" ? data.viewer.login : void 0;
-  return {
-    facts: { ...typeof item.title === "string" ? { title: item.title } : {}, ...state ? { state } : {} },
-    ...viewer ? { viewer } : {},
-    events
-  };
-}
-async function lookUpRef(runGh, ref) {
-  try {
-    const raw = JSON.parse(
-      await runGh(["api", `repos/${ref.repo}/issues/${ref.number}`, "--jq", "{title: .title, state: .state, merged: (.pull_request.merged_at != null)}"])
-    );
-    return {
-      ...typeof raw.title === "string" ? { title: raw.title } : {},
-      state: raw.merged === true ? "merged" : raw.state === "closed" ? "closed" : "open"
-    };
-  } catch {
-    return {};
-  }
-}
-var FRESH_MS = 6e4;
-var FRESHEN_LIMIT = 6;
-var CHECK_WRITTEN_AFTER_MS = 10 * 6e4;
-async function freshenRefs(paths, keys, runGh, options) {
-  if (!keys.length) return 0;
-  const index = await readIndex(paths);
-  const maxAge = options.maxAgeMs ?? FRESH_MS;
-  const { checked } = options;
-  const lastCheck = (ref) => Math.max(ref.checkedAt ?? 0, checked?.get(ref.key) ?? 0);
-  const stale = [...new Set(keys)].map((key) => index.refs[key]).filter((ref) => ref !== void 0 && (!lastCheck(ref) || options.now - lastCheck(ref) > maxAge)).slice(0, options.limit ?? FRESHEN_LIMIT);
-  if (!stale.length) return 0;
-  const found = await Promise.all(stale.map(async (ref) => [ref.key, await lookUpRef(runGh, ref)]));
-  for (const [key] of found) checked?.set(key, options.now);
-  await updateIndex(paths, (draft) => {
-    for (const [key, facts] of found) {
-      const ref = draft.refs[key];
-      if (!ref) continue;
-      const title = facts.title ? facts.title.slice(0, 200) : void 0;
-      const same = (title === void 0 || title === ref.title) && (facts.state === void 0 || facts.state === ref.state);
-      if (same && checked && ref.checkedAt !== void 0 && options.now - ref.checkedAt < CHECK_WRITTEN_AFTER_MS) continue;
-      ref.checkedAt = options.now;
-      if (title) ref.title = title;
-      if (facts.state) ref.state = facts.state;
-    }
-  });
-  return stale.length;
 }
 
 // src/backend/github.ts
@@ -2559,9 +2560,11 @@ var GitHubWatcher = class {
           if (applyActivity(draft, notice.key, { at: notice.at, reason: notice.reason }, true)) count2 += 1;
           continue;
         }
-        ref.checkedAt = now;
         if (news.facts.title) ref.title = news.facts.title.slice(0, 200);
-        if (news.facts.state) ref.state = news.facts.state;
+        if (news.facts.state) {
+          ref.state = news.facts.state;
+          ref.checkedAt = now;
+        }
         const worth = newsAfter(news.events, after, news.viewer);
         if (!worth) quiet.push(notice.key);
         else if (applyActivity(draft, notice.key, worth, true)) count2 += 1;
@@ -2590,12 +2593,13 @@ var GitHubWatcher = class {
   async enrich() {
     const index = await readIndex(this.paths);
     const now = this.now();
+    const lastCheck = (ref) => Math.max(ref.state ? ref.checkedAt ?? 0 : 0, this.#checked.get(ref.key) ?? 0);
     const due = Object.values(index.refs).filter((ref) => {
-      const last = Math.max(ref.checkedAt ?? 0, this.#checked.get(ref.key) ?? 0);
+      const last = lastCheck(ref);
       if (!last) return true;
       const closed = ref.state === "closed" || ref.state === "merged";
-      return now - last > (closed ? CLOSED_RECHECK_MS : OPEN_RECHECK_MS);
-    }).sort((a, b) => Number(Boolean(a.checkedAt)) - Number(Boolean(b.checkedAt)) || b.lastMentionAt - a.lastMentionAt).slice(0, LOOKUPS_PER_ROUND);
+      return now - last > (!ref.state ? FRESH_MS : closed ? CLOSED_RECHECK_MS : OPEN_RECHECK_MS);
+    }).sort((a, b) => lastCheck(a) - lastCheck(b) || b.lastMentionAt - a.lastMentionAt).slice(0, LOOKUPS_PER_ROUND);
     if (!due.length) return;
     const found = /* @__PURE__ */ new Map();
     for (const ref of due) found.set(ref.key, await lookUpRef(this.runGh, ref));
@@ -2603,14 +2607,15 @@ var GitHubWatcher = class {
     await updateIndex(this.paths, (draft) => {
       for (const [key, facts] of found) {
         const ref = draft.refs[key];
-        if (!ref) continue;
+        if (!ref || !facts.state) continue;
         ref.checkedAt = now;
         if (facts.title) ref.title = facts.title.slice(0, 200);
-        if (facts.state) ref.state = facts.state;
+        ref.state = facts.state;
       }
     });
+    for (const key of found.keys()) this.#checked.set(key, now);
   }
-  #freshening = /* @__PURE__ */ new Set();
+  #freshening = /* @__PURE__ */ new Map();
   /** When each PR or issue was last looked up for someone looking at it, also when the index was not rewritten for it. */
   #checked = /* @__PURE__ */ new Map();
   /**
@@ -2619,13 +2624,21 @@ var GitHubWatcher = class {
    * An answer that changes nothing rewrites the index at most every ten minutes.
    */
   async freshen(keys, options = {}) {
-    const wanted = keys.filter((key) => !this.#freshening.has(key));
-    for (const key of wanted) this.#freshening.add(key);
-    try {
-      return await freshenRefs(this.paths, wanted, this.runGh, { now: this.now(), checked: this.#checked, ...options });
-    } finally {
-      for (const key of wanted) this.#freshening.delete(key);
+    const pending = /* @__PURE__ */ new Set();
+    const wanted = [];
+    for (const key of new Set(keys)) {
+      const running = this.#freshening.get(key);
+      if (running) pending.add(running);
+      else wanted.push(key);
     }
+    if (wanted.length) {
+      const work = freshenRefs(this.paths, wanted, this.runGh, { now: this.now(), checked: this.#checked, ...options }).finally(() => {
+        for (const key of wanted) this.#freshening.delete(key);
+      });
+      for (const key of wanted) this.#freshening.set(key, work);
+      pending.add(work);
+    }
+    return (await Promise.all(pending)).reduce((sum, count2) => sum + count2, 0);
   }
 };
 
@@ -5730,6 +5743,7 @@ var IDLE_EVERY_MS = 10 * 6e4;
 var REMOTE_EVERY_MS = 6e4;
 var REMOTE_FIRST_MS = 1e4;
 var HOST_INFO_WAIT_MS = 1500;
+var REF_STATE_WAIT_MS = 500;
 var REPORTED_HOSTS = 500;
 var CLIENT_ID = /^[A-Za-z0-9-]{8,64}$/u;
 var FOCUS_LIMIT = 64;
@@ -5742,7 +5756,7 @@ var OLD_FOLDER_EVERY_MS = 3e4;
 function homeAsTilde(file, home = os4.homedir()) {
   return home && (file === home || file.startsWith(`${home}${path17.sep}`)) ? `~${file.slice(home.length)}` : file;
 }
-var VERSION2 = true ? "0.10.5" : "dev";
+var VERSION2 = true ? "0.10.6" : "dev";
 var isRecord18 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var own3 = (record, key) => Object.hasOwn(record, key) ? record[key] : void 0;
 var contentKey = (value) => createHash("sha1").update(JSON.stringify(value)).digest("base64url").slice(0, 16);
@@ -6001,13 +6015,17 @@ async function activate(ctx, options = {}) {
     remote: { hostOf: (threadId) => hostOf(threadId), down: (hostId) => remote.down(hostId), listed: () => remote.listed() }
   });
   const lookups = /* @__PURE__ */ new Set();
-  const freshenRefs2 = (keys) => {
-    if (!keys.length) return;
+  const freshenRefs2 = (keys, limit = FRESHEN_LIMIT) => {
+    if (!keys.length || limit <= 0 || stopping.signal.aborted) return Promise.resolve(0);
     const lookup = (async () => {
-      if ((await currentSettings()).prAlerts) await github.freshen(keys);
-    })().catch((error) => log.error("look up PR states", error));
+      return (await currentSettings()).prAlerts ? github.freshen(keys, { limit }) : 0;
+    })().catch((error) => {
+      log.error("look up PR states", error);
+      return 0;
+    });
     lookups.add(lookup);
     void lookup.finally(() => lookups.delete(lookup));
+    return lookup;
   };
   const summarizerKey = () => JSON.stringify(summarizer.status());
   ctx.handle("snapshot", async (raw) => {
@@ -6118,7 +6136,14 @@ async function activate(ctx, options = {}) {
       void threads.lookupChildren(threadId).then((changed) => {
         if (changed) maintainSoon();
       });
-      freshenRefs2(view.refs.map((ref) => ref.key));
+      const missing = view.refs.filter((ref) => !ref.state).map((ref) => ref.key);
+      const fill = freshenRefs2(missing);
+      const known = view.refs.filter((ref) => ref.state).map((ref) => ref.key);
+      void fill.then((asked) => freshenRefs2(known, FRESHEN_LIMIT - asked));
+      if (missing.length && await within(fill, REF_STATE_WAIT_MS).catch(() => 0)) {
+        const latest = await currentIndex();
+        view.refs = refsForThread(latest, threadId).map((ref) => viewRef(latest, ref));
+      }
       return clean(fitView(view));
     } catch (error) {
       rethrow(error);

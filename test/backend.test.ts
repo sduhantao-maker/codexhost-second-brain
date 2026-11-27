@@ -355,6 +355,36 @@ describe("the bell on news about PRs and issues", () => {
 });
 
 describe("PR states when looked at", () => {
+  it("includes a newly indexed issue's state in the first card even with six older PR states to refresh", async () => {
+    const dataDir = path.join(root, "data");
+    const extensionDir = path.join(root, "extension");
+    await mkdir(path.join(extensionDir, "bin"), { recursive: true });
+    await writeFile(path.join(extensionDir, "bin", "mainline.mjs"), "// cli\n");
+    const { updateIndex, refsPaths } = await import("../src/node/refs-store.js");
+    const { addMention, extractLinks } = await import("../src/core/refs.js");
+    await updateIndex(refsPaths(dataDir), (index) => {
+      for (let number = 1; number <= 7; number++) {
+        const kind = number === 1 ? "issues" : "pull";
+        const link = extractLinks(`https://github.com/o/r/${kind}/${number}`)[0]!;
+        addMention(index, link, { threadId: "src", turn: 1, at: number, role: "agent" });
+        if (number > 1) index.refs[link.key]!.state = "open";
+      }
+    });
+    const handlers = new Map<string, (params: unknown) => unknown>();
+    const stalePR = Promise.withResolvers<string>();
+    const dispose = await activate(
+      { extensionId: "second-brain", extensionDir, dataDir, readSettings: async () => ({}), writeSettings: async (values) => values, handle: (method, handler) => handlers.set(method, handler) },
+      { runGh: async ([, route]) => route?.endsWith("/1") ? JSON.stringify({ state: "closed", title: "Fixed" }) : stalePR.promise },
+    );
+    try {
+      const view = (await handlers.get("conversation")!({ threadId: "src" })) as ConversationView;
+      expect(view.refs.find((ref) => ref.number === 1)).toMatchObject({ state: "closed", title: "Fixed" });
+    } finally {
+      stalePR.resolve(JSON.stringify({ state: "open" }));
+      await dispose();
+    }
+  });
+
   it("looks the PRs a conversation shows up again when they are over a minute old", async () => {
     const dataDir = path.join(root, "host-extension-data", "second-brain");
     const extensionDir = path.join(root, "extension");

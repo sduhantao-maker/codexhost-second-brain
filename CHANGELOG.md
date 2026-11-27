@@ -1,5 +1,11 @@
 # 更新记录 / Changelog
 
+## 0.10.6
+
+修复了侧栏悬停卡里新关联的 GitHub Issue 状态留白的问题。卡片会优先查询缺少状态的条目，一旦取得结果就显示「进行中」或「已关闭」。如果 GitHub 暂时没有返回状态，卡片会显示「状态待确认」，稍后自动更新。
+
+Newly linked GitHub issues could appear without a status in the sidebar hover card. The card now checks items with a missing status first and shows “Open” or “Closed” as soon as GitHub confirms it. While the status is unavailable, the card shows “Status unknown” and updates automatically when the lookup succeeds.
+
 ## 0.10.5
 
 更新了第二大脑的图标。黑底上的两条暖白曲线在脑形轮廓内汇合，右上方的第二道弧线在 24 像素的插件列表里也清晰可见。

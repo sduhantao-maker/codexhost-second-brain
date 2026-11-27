@@ -5,7 +5,7 @@
     "en": "Second Brain",
     "zh-CN": "第二大脑"
   },
-  "version": "0.10.5",
+  "version": "0.10.6",
   "description": {
     "en": "Your attention is limited; get it back fast. Second Brain remembers what each conversation is doing, how far it got, and which replies are worth keeping. Rest the pointer on a conversation in the sidebar to see its mainline, milestones and tasks, or show them in the conversation header.",
     "zh-CN": "有限的注意力，迅速收回。记住每个对话在做什么、做到哪一步、哪段回复值得留下。鼠标停在侧栏的对话上，就能看到它的主线、里程碑和支线任务；也可以显示在对话标题栏。"

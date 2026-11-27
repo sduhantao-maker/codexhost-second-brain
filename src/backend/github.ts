@@ -7,9 +7,9 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { applyActivity, linkFromApiUrl, newsAfter, noteNotified } from "../core/refs.js";
+import { applyActivity, linkFromApiUrl, newsAfter, noteNotified, type Ref } from "../core/refs.js";
 import { createGhRunner, findGh, type RunGh } from "../node/gh.js";
-import { freshenRefs, lookUpNews, lookUpRef, type RefFacts, type RefNews } from "../node/refs-github.js";
+import { FRESH_MS, freshenRefs, lookUpNews, lookUpRef, type RefFacts, type RefNews } from "../node/refs-github.js";
 import { readIndex, updateIndex, type RefsPaths } from "../node/refs-store.js";
 import { writeJsonFile } from "../node/store.js";
 
@@ -173,9 +173,11 @@ export class GitHubWatcher {
           if (applyActivity(draft, notice.key, { at: notice.at, reason: notice.reason }, true)) count += 1;
           continue;
         }
-        ref.checkedAt = now;
         if (news.facts.title) ref.title = news.facts.title.slice(0, 200);
-        if (news.facts.state) ref.state = news.facts.state;
+        if (news.facts.state) {
+          ref.state = news.facts.state;
+          ref.checkedAt = now;
+        }
         const worth = newsAfter(news.events, after, news.viewer);
         if (!worth) quiet.push(notice.key);
         else if (applyActivity(draft, notice.key, worth, true)) count += 1;
@@ -207,15 +209,16 @@ export class GitHubWatcher {
   async enrich(): Promise<void> {
     const index = await readIndex(this.paths);
     const now = this.now();
+    const lastCheck = (ref: Ref) => Math.max(ref.state ? ref.checkedAt ?? 0 : 0, this.#checked.get(ref.key) ?? 0);
     const due = Object.values(index.refs)
       .filter((ref) => {
         // A lookup when it was looked at counts too, also one the index was not rewritten for.
-        const last = Math.max(ref.checkedAt ?? 0, this.#checked.get(ref.key) ?? 0);
+        const last = lastCheck(ref);
         if (!last) return true;
         const closed = ref.state === "closed" || ref.state === "merged";
-        return now - last > (closed ? CLOSED_RECHECK_MS : OPEN_RECHECK_MS);
+        return now - last > (!ref.state ? FRESH_MS : closed ? CLOSED_RECHECK_MS : OPEN_RECHECK_MS);
       })
-      .sort((a, b) => Number(Boolean(a.checkedAt)) - Number(Boolean(b.checkedAt)) || b.lastMentionAt - a.lastMentionAt)
+      .sort((a, b) => lastCheck(a) - lastCheck(b) || b.lastMentionAt - a.lastMentionAt)
       .slice(0, LOOKUPS_PER_ROUND);
     if (!due.length) return;
     const found = new Map<string, RefFacts>();
@@ -224,15 +227,16 @@ export class GitHubWatcher {
     await updateIndex(this.paths, (draft) => {
       for (const [key, facts] of found) {
         const ref = draft.refs[key];
-        if (!ref) continue;
+        if (!ref || !facts.state) continue;
         ref.checkedAt = now;
         if (facts.title) ref.title = facts.title.slice(0, 200);
-        if (facts.state) ref.state = facts.state;
+        ref.state = facts.state;
       }
     });
+    for (const key of found.keys()) this.#checked.set(key, now);
   }
 
-  readonly #freshening = new Set<string>();
+  readonly #freshening = new Map<string, Promise<number>>();
   /** When each PR or issue was last looked up for someone looking at it, also when the index was not rewritten for it. */
   readonly #checked = new Map<string, number>();
 
@@ -241,13 +245,21 @@ export class GitHubWatcher {
    * older than a minute; the 30-minute rounds keep the rest current. Returns how many it asked.
    * An answer that changes nothing rewrites the index at most every ten minutes.
    */
-  async freshen(keys: readonly string[], options: { maxAgeMs?: number } = {}): Promise<number> {
-    const wanted = keys.filter((key) => !this.#freshening.has(key));
-    for (const key of wanted) this.#freshening.add(key);
-    try {
-      return await freshenRefs(this.paths, wanted, this.runGh, { now: this.now(), checked: this.#checked, ...options });
-    } finally {
-      for (const key of wanted) this.#freshening.delete(key);
+  async freshen(keys: readonly string[], options: { maxAgeMs?: number; limit?: number } = {}): Promise<number> {
+    const pending = new Set<Promise<number>>();
+    const wanted: string[] = [];
+    for (const key of new Set(keys)) {
+      const running = this.#freshening.get(key);
+      if (running) pending.add(running);
+      else wanted.push(key);
     }
+    if (wanted.length) {
+      const work = freshenRefs(this.paths, wanted, this.runGh, { now: this.now(), checked: this.#checked, ...options }).finally(() => {
+        for (const key of wanted) this.#freshening.delete(key);
+      });
+      for (const key of wanted) this.#freshening.set(key, work);
+      pending.add(work);
+    }
+    return (await Promise.all(pending)).reduce((sum, count) => sum + count, 0);
   }
 }

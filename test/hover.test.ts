@@ -298,6 +298,27 @@ describe("sidebar hover card", () => {
     expect(root.querySelector(".relations")).toBeNull();
   });
 
+  it.each([
+    ["zh-CN", "状态待确认", "open", "进行中"],
+    ["en", "Status unknown", "closed", "Closed"],
+  ] as const)("shows a pending Issue state until its update arrives (%s)", async (locale, pending, state, label) => {
+    document.documentElement.lang = locale;
+    const view = env.views[T.old]!;
+    const issue = { ...view.refs[0]! };
+    view.refs = [issue];
+    delete issue.state;
+    move(null, env.titleOf(T.old));
+    await wait(SHOW_DELAY_MS);
+    const selector = '[data-section="refs"] .ref-state';
+    expect(text(card(), selector)).toBe(pending);
+
+    issue.state = state;
+    env.publish("updated-issue");
+    await wait(0);
+    expect(text(card(), selector)).toBe(label);
+    expect(card()!.querySelector(selector)?.getAttribute("data-state")).toBe(state);
+  });
+
   it("marks a draft and shows what started it and the latest request", async () => {
     move(null, env.titleOf(T.old));
     await wait(SHOW_DELAY_MS);

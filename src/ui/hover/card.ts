@@ -537,6 +537,7 @@ function refs(view: ConversationView, ctx: CardContext): HTMLElement | null {
 
 function refRow(ref: RefView, ctx: CardContext, onFollow?: () => void): HTMLElement {
   const { h, t } = ctx;
+  const state = ref.state ?? "unknown";
   // Only web links leave the card; anything else stays inert text.
   const href = /^https:\/\//iu.test(ref.url) ? ref.url : undefined;
   return h(
@@ -554,6 +555,6 @@ function refRow(ref: RefView, ctx: CardContext, onFollow?: () => void): HTMLElem
     },
     h("span", { class: "ref-number", text: `${t.kind[ref.kind] ?? ref.kind} #${ref.number}` }),
     h("span", { class: "ref-title", text: ref.title ?? ref.repo }),
-    ref.state ? h("span", { class: "ref-state", text: t.refState[ref.state] ?? ref.state, attrs: { "data-state": ref.state } }) : null,
+    h("span", { class: "ref-state", text: t.refState[state] ?? state, attrs: { "data-state": state } }),
   );
 }

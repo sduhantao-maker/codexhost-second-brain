@@ -2202,9 +2202,10 @@ async function lookUpRef(runGh, ref) {
     const raw = JSON.parse(
       await runGh(["api", `repos/${ref.repo}/issues/${ref.number}`, "--jq", "{title: .title, state: .state, merged: (.pull_request.merged_at != null)}"])
     );
+    if (raw.state !== "open" && raw.state !== "closed") return {};
     return {
       ...typeof raw.title === "string" ? { title: raw.title } : {},
-      state: raw.merged === true ? "merged" : raw.state === "closed" ? "closed" : "open"
+      state: raw.merged === true ? "merged" : raw.state
     };
   } catch {
     return {};
@@ -2218,21 +2219,21 @@ async function freshenRefs(paths, keys, runGh, options) {
   const index = await readIndex(paths);
   const maxAge = options.maxAgeMs ?? FRESH_MS;
   const { checked } = options;
-  const lastCheck = (ref) => Math.max(ref.checkedAt ?? 0, checked?.get(ref.key) ?? 0);
-  const stale = [...new Set(keys)].map((key) => index.refs[key]).filter((ref) => ref !== void 0 && (!lastCheck(ref) || options.now - lastCheck(ref) > maxAge)).slice(0, options.limit ?? FRESHEN_LIMIT);
+  const lastCheck = (ref) => Math.max(ref.state ? ref.checkedAt ?? 0 : 0, checked?.get(ref.key) ?? 0);
+  const stale = [...new Set(keys)].map((key) => index.refs[key]).filter((ref) => ref !== void 0 && (!lastCheck(ref) || options.now - lastCheck(ref) > maxAge)).sort((a, b) => Number(Boolean(a.state)) - Number(Boolean(b.state))).slice(0, options.limit ?? FRESHEN_LIMIT);
   if (!stale.length) return 0;
   const found = await Promise.all(stale.map(async (ref) => [ref.key, await lookUpRef(runGh, ref)]));
   for (const [key] of found) checked?.set(key, options.now);
   await updateIndex(paths, (draft) => {
     for (const [key, facts] of found) {
       const ref = draft.refs[key];
-      if (!ref) continue;
+      if (!ref || !facts.state) continue;
       const title = facts.title ? facts.title.slice(0, 200) : void 0;
-      const same = (title === void 0 || title === ref.title) && (facts.state === void 0 || facts.state === ref.state);
+      const same = (title === void 0 || title === ref.title) && facts.state === ref.state;
       if (same && checked && ref.checkedAt !== void 0 && options.now - ref.checkedAt < CHECK_WRITTEN_AFTER_MS) continue;
       ref.checkedAt = options.now;
       if (title) ref.title = title;
-      if (facts.state) ref.state = facts.state;
+      ref.state = facts.state;
     }
   });
   return stale.length;
@@ -2254,7 +2255,7 @@ function commandPath(dataDir, platform = process.platform) {
 }
 
 // src/cli/main.ts
-var VERSION2 = true ? "0.10.5" : "dev";
+var VERSION2 = true ? "0.10.6" : "dev";
 var VALUE_FLAGS = {
   "--thread": "thread",
   "--data-dir": "dataDir",

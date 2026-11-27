@@ -25,7 +25,7 @@ export interface HoverStrings {
   refs: string;
   moreRefs(count: number): string;
   kind: Record<RefKind, string>;
-  refState: Record<RefState, string>;
+  refState: Record<RefState | "unknown", string>;
   origin: string;
   lastPrompt: string;
   loading: string;
@@ -151,7 +151,7 @@ const zh: HoverStrings = {
   refs: "PR 与 Issue",
   moreRefs: (count) => `还有 ${count} 个`,
   kind: { pr: "PR", issue: "Issue" },
-  refState: { open: "进行中", closed: "已关闭", merged: "已合并" },
+  refState: { open: "进行中", closed: "已关闭", merged: "已合并", unknown: "状态待确认" },
   origin: "起因：",
   lastPrompt: "最近请求：",
   loading: "正在读取…",
@@ -218,7 +218,7 @@ const en: HoverStrings = {
   refs: "PRs and issues",
   moreRefs: (count) => `${count} more`,
   kind: { pr: "PR", issue: "Issue" },
-  refState: { open: "Open", closed: "Closed", merged: "Merged" },
+  refState: { open: "Open", closed: "Closed", merged: "Merged", unknown: "Status unknown" },
   origin: "Started with:",
   lastPrompt: "Last request:",
   loading: "Loading…",
